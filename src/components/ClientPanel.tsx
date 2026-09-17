@@ -175,7 +175,7 @@ export function ClientPanel({
   const removeClient = async (client: ClientRecord) => {
     if (
       !confirm(
-        `Xóa hồ sơ “${client.name}”? Project đang liên kết phải được xóa trước.`,
+        `Xóa hồ sơ “${client.name}”? Project và ảnh đang liên kết phải được xóa trước.`,
       )
     )
       return;

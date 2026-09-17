@@ -10,6 +10,7 @@ import {
   lastClearIndex,
 } from "./historyTimeline";
 import { ClientPanel } from "./ClientPanel";
+import { PhotoPanel } from "./PhotoPanel";
 import type { ClientRecord } from "../services/clients";
 import {
   createDiagram,
@@ -3567,34 +3568,9 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         </div>
       </div>
 
-      {/* ================= TAB 2: Ô NHẬP ẢNH KHÁCH HÀNG ================= */}
+      {/* ================= TAB 2: ẢNH KHÁCH HÀNG ================= */}
       <div id="tabPhoto" className="app-container" style={{ display: "none" }}>
-        <div className="app-sidebar">
-          <div className="card-group">
-            <div className="group-label">Ảnh khách hàng</div>
-            <button
-              className="primary"
-              onClick={() =>
-                (
-                  document.getElementById("photoFileInput") as HTMLInputElement
-                )?.click()
-              }
-            >
-              Nhập ảnh khách hàng
-            </button>
-            <input
-              type="file"
-              id="photoFileInput"
-              accept="image/*"
-              style={{ display: "none" }}
-            />
-          </div>
-        </div>
-        <div className="app-viewport">
-          <div className="canvas-frame">
-            <canvas id="photoCanvas" width="900" height="700" />
-          </div>
-        </div>
+        <PhotoPanel client={activeClient} />
       </div>
 
       {/* ================= TAB 3: QUẢN LÝ KHÁCH HÀNG ================= */}
