@@ -1,6 +1,6 @@
 [package]
 name = "frontend"
-version = "0.2.0"
+version = "0.3.0"
 description = "HairTech 3D desktop application"
 authors = ["HairTech"]
 edition = "2021"

@@ -9,7 +9,7 @@ export function liftedPoint(root: THREE.Vector3, normal: THREE.Vector3, angle: n
   const right = new THREE.Vector3().crossVectors(up, n).normalize();
   const heading = THREE.MathUtils.degToRad(direction);
   const tangent = up.multiplyScalar(Math.cos(heading)).addScaledVector(right, Math.sin(heading));
-  const elevation = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(angle, 0, 90));
+  const elevation = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(angle, 0, 180));
   return root.clone().addScaledVector(n, Math.sin(elevation) * length).addScaledVector(tangent, Math.cos(elevation) * length);
 }
 

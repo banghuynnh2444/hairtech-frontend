@@ -11,6 +11,7 @@ type Options = {
   head: () => THREE.Object3D; scalpHit: (event: PointerEvent) => ScalpHit | null;
   color: () => string; fit?: (points: THREE.Vector3[]) => void;
   push: (entry: { kind: 'guided_nodes'; operation: Operation }) => void;
+  onRequestRender?: () => void;
 };
 
 export class GuidedNodes {
@@ -20,7 +21,7 @@ export class GuidedNodes {
   private readonly panel = document.getElementById('guidedNodeSettings')!;
   private readonly status = document.getElementById('guidedNodeStatus')!;
   private readonly apply = document.getElementById('guidedNodeApply') as HTMLButtonElement;
-  private readonly close = document.getElementById('guidedNodeClose') as HTMLButtonElement;
+  private readonly close = document.getElementById('guidedNodeClose') as HTMLButtonElement | null;
   private readonly angle = document.getElementById('guidedNodeAngle') as HTMLInputElement;
   private readonly direction = document.getElementById('guidedNodeDirection') as HTMLSelectElement;
   private readonly length = document.getElementById('guidedNodeLength') as HTMLInputElement;
@@ -70,19 +71,26 @@ export class GuidedNodes {
       this.movingRoot = true;
       this.status.textContent = 'Bấm vị trí chân tóc mới trên da đầu. Điểm cũ chỉ đổi khi bấm Cập nhật.';
     });
+
     const fit = document.getElementById('guidedNodeFit');
     if (fit) on(fit, 'click', () => {
       const points = [...this.nodes.values()].map(node => this.tip(node));
       if (this.draft) points.push(this.tip(this.draft));
       options.fit?.(points);
     });
-    on(this.close, 'click', () => {
-      if (this.close.disabled) return;
-      options.push({ kind: 'guided_nodes', operation: { type: 'close', chain: this.chain } });
-      this.chain = crypto.randomUUID();
-      this.cancelDraft();
-    });
+    if (this.close) {
+      on(this.close, 'click', () => {
+        if (this.close?.disabled) return;
+        options.push({ kind: 'guided_nodes', operation: { type: 'close', chain: this.chain } });
+        this.chain = crypto.randomUUID();
+        this.cancelDraft();
+      });
+    }
     this.changeSettings();
+  }
+
+  private requestRender() {
+    this.options.onRequestRender?.();
   }
 
   private disposeChildren(group: THREE.Group) {
@@ -140,6 +148,7 @@ export class GuidedNodes {
     this.disposeChildren(this.preview);
     this.status.textContent = '1. Bấm trên da đầu để chọn chân tóc.';
     this.updateClose();
+    this.requestRender();
   }
 
   breakChain() {
@@ -148,7 +157,9 @@ export class GuidedNodes {
   }
 
   private updateClose() {
-    this.close.disabled = !!this.draft || this.closed.has(this.chain) || [...this.nodes.values()].filter(node => node.chain === this.chain).length < 3;
+    if (this.close) {
+      this.close.disabled = !!this.draft || this.closed.has(this.chain) || [...this.nodes.values()].filter(node => node.chain === this.chain).length < 3;
+    }
   }
 
   private changeSettings() {
@@ -172,35 +183,19 @@ export class GuidedNodes {
     this.disposeChildren(this.preview);
     if (!this.enabled || !this.draft) return;
     this.draw(this.preview, this.draft, true);
-    const root = new THREE.Vector3(...this.draft.root);
-    const tip = this.tip(this.draft);
-    const normal = new THREE.Vector3(...this.draft.normal);
-    const start = root.clone().addScaledVector(normal, 0.007);
-    const segment = tip.clone().sub(start);
-    const ray = new THREE.Raycaster(start, segment.clone().normalize(), 0, segment.length() - 0.01);
-    this.options.head().updateWorldMatrix(true, false);
     const length = this.lengthNumber.valueAsNumber;
     const validLength = Number.isFinite(length) && length >= 0.05 && length <= 1.5;
-    this.valid = validLength && ray.intersectObject(this.options.head(), false).length === 0;
+    this.valid = validLength;
     this.apply.disabled = !this.valid;
     this.cancel.disabled = false;
     this.moveRoot.disabled = false;
     const editing = this.nodes.has(this.draft.id);
     this.apply.textContent = editing ? 'Cập nhật điểm' : 'Đặt điểm';
-    const chain = [...this.nodes.values()].filter(node => node.chain === this.draft!.chain);
-    const index = chain.findIndex(node => node.id === this.draft!.id);
-    if (index >= 0) {
-      if (index > 0) this.line(this.preview, [this.tip(chain[index - 1]), tip], '#22d3ee');
-      if (index < chain.length - 1) this.line(this.preview, [tip, this.tip(chain[index + 1])], '#22d3ee');
-      if (this.closed.has(this.draft.chain) && chain.length >= 3) {
-        if (index === 0) this.line(this.preview, [this.tip(chain[chain.length - 1]), tip], '#22d3ee');
-        if (index === chain.length - 1) this.line(this.preview, [tip, this.tip(chain[0])], '#22d3ee');
-      }
-    } else if (chain.length) this.line(this.preview, [this.tip(chain[chain.length - 1]), tip], '#22d3ee');
-    this.status.textContent = !validLength ? 'Nhập độ dài từ 0.05 đến 1.50.' : this.valid
-      ? '2. Chỉnh góc và độ dài. 3. Bấm ' + (editing ? 'Cập nhật điểm' : 'Đặt điểm') + ' để giữ kết quả.'
-      : 'Hướng này đi xuyên đầu. Hãy tăng góc nâng hoặc đổi hướng.';
+    this.status.textContent = !validLength
+      ? 'Nhập độ dài từ 0.05 đến 1.50.'
+      : '2. Chỉnh góc (0°-180°) và độ dài. 3. Bấm ' + (editing ? 'Cập nhật điểm' : 'Đặt điểm') + ' để giữ điểm mốc.';
     this.updateClose();
+    this.requestRender();
   }
 
   private pick(event: PointerEvent) {
@@ -240,6 +235,7 @@ export class GuidedNodes {
       this.updatePreview();
     }
     this.ring.visible = false;
+    this.requestRender();
     return true;
   }
 
@@ -262,20 +258,49 @@ export class GuidedNodes {
         this.status.textContent = 'Bấm để giữ chân tóc tại chấm vàng; chấm xanh là vị trí điểm dự kiến.';
       } else this.status.textContent = 'Bấm trên da đầu để chọn chân tóc.';
     }
+    this.requestRender();
     return true;
+  }
+
+  hideRing() {
+    this.ring.visible = false;
   }
 
   viewChanged() {
     this.ring.visible = false;
-    if (this.draft) this.updatePreview();
-    else this.disposeChildren(this.preview);
+    if (this.draft) {
+      this.updatePreview();
+    }
   }
 
   commit() {
     if (!this.enabled || !this.draft || !this.valid || this.apply.disabled) return;
     this.options.push({ kind: 'guided_nodes', operation: { type: 'put', node: structuredClone(this.draft) } });
+    this.chain = crypto.randomUUID();
     this.cancelDraft();
-    this.status.textContent = 'Đã giữ điểm. Chọn chân tóc tiếp theo để nối điểm, hoặc bấm điểm cũ để sửa.';
+    this.status.textContent = 'Đã lưu điểm mốc chân tóc. Tiếp tục click trên da đầu để đặt điểm mới.';
+  }
+
+  getNodesList(): Array<{
+    id: string;
+    root: THREE.Vector3;
+    tip: THREE.Vector3;
+    normal: THREE.Vector3;
+    color: string;
+    length: number;
+    angle: number;
+    direction: number;
+  }> {
+    return [...this.nodes.values()].map(node => ({
+      id: node.id,
+      root: new THREE.Vector3(...node.root),
+      tip: this.tip(node),
+      normal: new THREE.Vector3(...node.normal),
+      color: node.color,
+      length: node.length,
+      angle: node.angle,
+      direction: node.direction,
+    }));
   }
 
   renderHistory(history: Array<{ kind: string; operation?: Operation }>, step: number) {
@@ -310,9 +335,16 @@ export class GuidedNodes {
       }
     }
     this.updateClose();
+    this.requestRender();
   }
 
-  setFillVisible(visible: boolean) { this.visibleFill = visible; }
+  setFillVisible(visible: boolean) {
+    this.visibleFill = visible;
+    this.sceneGroup.traverse((obj: any) => {
+      if (obj.userData?.isFillMesh) obj.visible = visible;
+    });
+    this.requestRender();
+  }
 
   dispose() {
     this.listeners.forEach(remove => remove());

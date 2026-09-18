@@ -24,6 +24,7 @@ interface ClientPanelProps {
     project: DiagramSummary,
   ) => Promise<void>;
   onDeleteProject: (project: DiagramSummary) => Promise<void>;
+  onViewPhotos?: () => void;
 }
 
 const emptyForm: ClientInput = { name: "", phone: "", note: "" };
@@ -53,6 +54,7 @@ export function ClientPanel({
   onCreateProject,
   onOpenProject,
   onDeleteProject,
+  onViewPhotos,
 }: ClientPanelProps) {
   const [clients, setClients] = useState<ClientRecord[]>([]);
   const [projects, setProjects] = useState<DiagramSummary[]>([]);
@@ -361,12 +363,24 @@ export function ClientPanel({
                   {activeClient.note ? ` · ${activeClient.note}` : ""}
                 </p>
               </div>
-              <button
-                className="primary"
-                onClick={() => setProjectFormOpen(true)}
-              >
-                + Project mới
-              </button>
+              <div className="client-detail-actions">
+                {onViewPhotos && (
+                  <button
+                    type="button"
+                    className="secondary-btn view-photos-btn"
+                    onClick={onViewPhotos}
+                    title="Xem ảnh trước, sau và tham khảo của khách hàng"
+                  >
+                    📷 Kho ảnh
+                  </button>
+                )}
+                <button
+                  className="primary"
+                  onClick={() => setProjectFormOpen(true)}
+                >
+                  + Project mới
+                </button>
+              </div>
             </div>
             {projectFormOpen && (
               <form className="project-form" onSubmit={submitProject}>

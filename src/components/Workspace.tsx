@@ -11,7 +11,8 @@ import {
 } from "./historyTimeline";
 import { ClientPanel } from "./ClientPanel";
 import { PhotoPanel } from "./PhotoPanel";
-import type { ClientRecord } from "../services/clients";
+import { listClients, type ClientRecord } from "../services/clients";
+import { SaveNewProjectModal } from "./SaveNewProjectModal";
 import {
   createDiagram,
   deleteDiagram,
@@ -26,12 +27,32 @@ import {
   type JsonObject,
   type ProjectDataV1,
 } from "../services/project";
+import {
+  calculateAngleBetween2Lines,
+  createAngleSprite,
+  disposeObjectRecursively,
+} from "../three/helpers";
+import {
+  create3DBoxQuad as create3DBoxQuadHelper,
+  createElevationArrow3D as createElevationArrow3DHelper,
+  createAutoRectSection3D as createAutoRectSection3DHelper,
+} from "../three/sections";
+import {
+  createPermRod3D as createPermRod3DHelper,
+  createStraightAxisPermWave3D as createStraightAxisPermWave3DHelper,
+  findIntersectedPermWave as findIntersectedPermWaveHelper,
+} from "../three/perm";
+import { WorkspaceHeader, type SaveStatus, type ViewMode } from "./WorkspaceHeader";
+import { WorkspaceSidebar } from "./WorkspaceSidebar";
+import { WorkspaceViewport } from "./WorkspaceViewport";
+import { WorkspaceInspector } from "./WorkspaceInspector";
+import { AdminPanel } from "./AdminPanel";
+import { SettingsModal } from "./SettingsModal";
+import { checkIsAdmin } from "../services/admin";
 
 interface WorkspaceProps {
   onLogout: () => void;
 }
-
-type SaveStatus = "no-project" | "saved" | "unsaved" | "saving" | "error";
 
 interface ProjectRuntime {
   serialize: () => ProjectDataV1;
@@ -55,6 +76,72 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("no-project");
   const [dirtyRevision, setDirtyRevision] = useState(0);
   const [projectsRevision, setProjectsRevision] = useState(0);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSaveNewProjectModalOpen, setIsSaveNewProjectModalOpen] =
+    useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("standard");
+  const [currentTheme, setCurrentTheme] = useState<string>("luxury");
+  const [bg3dColor, setBg3dColor] = useState<string>("0xffffff");
+  const [isMeshFillVisible, setIsMeshFillVisible] = useState<boolean>(true);
+  const [isCageVisible, setIsCageVisible] = useState<boolean>(true);
+  const [isSnapEnabled, setIsSnapEnabled] = useState<boolean>(true);
+  const showWorkTabRef = useRef<((tab: string) => void) | null>(null);
+
+  const handleViewModeChange = (mode: ViewMode) => {
+    setViewMode(mode);
+    if (mode === "zen") {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => undefined);
+      }
+    } else {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => undefined);
+      }
+    }
+    setTimeout(() => {
+      window.dispatchEvent(new Event("resize"));
+    }, 120);
+  };
+
+  useEffect(() => {
+    const handleFullscreenKey = (e: KeyboardEvent) => {
+      if (e.key === "F11") {
+        e.preventDefault();
+        handleViewModeChange(viewMode === "zen" ? "standard" : "zen");
+      } else if (e.key === "Escape" && viewMode === "zen") {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        handleViewModeChange("standard");
+      }
+    };
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && viewMode === "zen") {
+        setViewMode("standard");
+        setTimeout(() => {
+          window.dispatchEvent(new Event("resize"));
+        }, 120);
+      }
+    };
+    window.addEventListener("keydown", handleFullscreenKey);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      window.removeEventListener("keydown", handleFullscreenKey);
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, [viewMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const admin = await checkIsAdmin();
+      if (!cancelled && admin) setIsAdmin(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     activeProjectRef.current = activeProject;
@@ -108,6 +195,60 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     });
     return savePromiseRef.current;
   }, []);
+
+  const handleHeaderSave = useCallback(async () => {
+    if (!activeProjectRef.current) {
+      setIsSaveNewProjectModalOpen(true);
+      return;
+    }
+    await saveActiveProject();
+  }, [saveActiveProject]);
+
+  const handleSaveNewProject = useCallback(
+    async (params: {
+      name: string;
+      clientId: string | null;
+      notes: string;
+    }) => {
+      const runtime = runtimeRef.current;
+      if (!runtime) throw new Error("Không gian thiết kế chưa sẵn sàng.");
+
+      setSaveStatus("saving");
+      try {
+        const projectData = runtime.serialize();
+        if (params.notes) {
+          projectData.settings.technical_notes = params.notes;
+        }
+
+        const created = await createDiagram({
+          client_id: params.clientId,
+          type: "hair-design-3d",
+          name: params.name,
+          notes: params.notes || null,
+          project_data: projectData,
+        });
+
+        if (params.clientId) {
+          try {
+            const allClients = await listClients();
+            const matching = allClients.find((c) => c.id === params.clientId);
+            if (matching) setActiveClient(matching);
+          } catch {
+            // bỏ qua nếu không tải được client
+          }
+        }
+
+        activeProjectRef.current = created;
+        setActiveProject(created);
+        setProjectsRevision((r) => r + 1);
+        setSaveStatus("saved");
+      } catch (error) {
+        setSaveStatus("error");
+        throw error;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!activeProject || dirtyRevision === 0 || saveStatus !== "unsaved")
@@ -230,8 +371,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
 
   const saveAsCopy = useCallback(async () => {
     const project = activeProjectRef.current;
+    if (!project) {
+      setIsSaveNewProjectModalOpen(true);
+      return;
+    }
     const runtime = runtimeRef.current;
-    if (!project || !runtime) return;
+    if (!runtime) return;
     const name = prompt("Tên bản sao:", `${project.name} - Bản sao`)?.trim();
     if (!name) return;
     setSaveStatus("saving");
@@ -268,6 +413,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     if (!rootRef.current) return;
     const eventController = new AbortController();
     let guidedNodes: GuidedNodes | null = null;
+    let requestRender: () => void = () => {};
 
     // --- 1. LẤY CÁC PHẦN TỬ GIAO DIỆN ---
     const themeSelector = document.getElementById(
@@ -317,29 +463,32 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     });
 
     // --- 2. ĐỔI THEME & NỀN ---
-    themeSelector.addEventListener(
-      "change",
-      (e: any) => {
-        const theme = e.target.value;
-        if (theme === "luxury") {
-          document.documentElement.removeAttribute("data-theme");
-          colorPicker.value = "#d4af37";
-        } else if (theme === "neon") {
-          document.documentElement.setAttribute("data-theme", "neon");
-          colorPicker.value = "#00f2fe";
-        } else if (theme === "light") {
-          document.documentElement.setAttribute("data-theme", "light");
-          colorPicker.value = "#2563eb";
-        }
-      },
-      { signal: eventController.signal },
-    );
+    if (themeSelector) {
+      themeSelector.addEventListener(
+        "change",
+        (e: any) => {
+          const theme = e.target.value;
+          if (theme === "luxury") {
+            document.documentElement.removeAttribute("data-theme");
+            colorPicker.value = "#d4af37";
+          } else if (theme === "neon") {
+            document.documentElement.setAttribute("data-theme", "neon");
+            colorPicker.value = "#00f2fe";
+          } else if (theme === "light") {
+            document.documentElement.setAttribute("data-theme", "light");
+            colorPicker.value = "#2563eb";
+          }
+        },
+        { signal: eventController.signal },
+      );
+    }
 
     if (bg3dSelect) {
       bg3dSelect.addEventListener(
         "change",
         (e: any) => {
           scene.background = new THREE.Color(parseInt(e.target.value, 16));
+          requestRender();
         },
         { signal: eventController.signal },
       );
@@ -354,6 +503,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
 
     let mode = "draw";
     let current2DTool = "line";
+    let draw2DPathMode: "curved" | "straight" = "curved";
     let active3DSubTool = "node3d";
     let activePermSubTool = "permRod";
     let is2DSnapEnabled = true;
@@ -362,25 +512,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     let timelineIndex = 0;
     let isPlaying = false;
     let playTimer: any = null;
-
-    function disposeObjectRecursively(obj: any) {
-      if (!obj) return;
-      obj.traverse((child: any) => {
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) {
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m: any) => {
-              if (m.map) m.map.dispose();
-              m.dispose();
-            });
-          } else {
-            if (child.material.map) child.material.map.dispose();
-            child.material.dispose();
-          }
-        }
-      });
-      if (obj.parent) obj.parent.remove(obj);
-    }
 
     extrudeLenPicker.addEventListener(
       "input",
@@ -515,18 +646,73 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         ctx.lineWidth = a.width * 2.2;
         if (a.type === "dashed")
           ctx.setLineDash([a.width * 3 + 6, a.width * 2 + 6]);
-        ctx.beginPath();
-        ctx.moveTo(a.x1, a.y1);
-        ctx.lineTo(a.x2, a.y2);
-        ctx.stroke();
-        if (a.type === "arrow")
-          drawArrowHead(
-            ctx,
-            { x: a.x1, y: a.y1 },
-            { x: a.x2, y: a.y2 },
-            a.color,
-            a.width,
-          );
+
+        if (a.straightPoints && a.straightPoints.length > 1) {
+          let hasSeamJump = false;
+          for (let i = 1; i < a.straightPoints.length; i++) {
+            if (Math.abs(a.straightPoints[i].x - a.straightPoints[i - 1].x) > TEX_SIZE * 0.4) {
+              hasSeamJump = true;
+              break;
+            }
+          }
+          if (!hasSeamJump && a.straightPoints.length >= 3) {
+            smoothPath(ctx, a.straightPoints);
+            ctx.stroke();
+          } else {
+            ctx.beginPath();
+            let started = false;
+            for (let i = 0; i < a.straightPoints.length; i++) {
+              const pt = a.straightPoints[i];
+              if (i > 0 && Math.abs(pt.x - a.straightPoints[i - 1].x) > TEX_SIZE * 0.4) {
+                ctx.stroke();
+                ctx.beginPath();
+                started = false;
+              }
+              if (!started) {
+                ctx.moveTo(pt.x, pt.y);
+                started = true;
+              } else {
+                ctx.lineTo(pt.x, pt.y);
+              }
+            }
+            ctx.stroke();
+          }
+
+          if (a.type === "arrow" && a.straightPoints.length >= 2) {
+            const last = a.straightPoints[a.straightPoints.length - 1];
+            const prev = a.straightPoints[a.straightPoints.length - 2];
+            drawArrowHead(ctx, prev, last, a.color, a.width);
+          }
+        } else {
+          const dx = a.x2 - a.x1;
+          if (Math.abs(dx) > TEX_SIZE * 0.5) {
+            const edgeX1 = a.x1 > a.x2 ? TEX_SIZE : 0;
+            const edgeX2 = a.x1 > a.x2 ? 0 : TEX_SIZE;
+            const midY = (a.y1 + a.y2) / 2;
+            ctx.beginPath();
+            ctx.moveTo(a.x1, a.y1);
+            ctx.lineTo(edgeX1, midY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(edgeX2, midY);
+            ctx.lineTo(a.x2, a.y2);
+            ctx.stroke();
+          } else {
+            ctx.beginPath();
+            ctx.moveTo(a.x1, a.y1);
+            ctx.lineTo(a.x2, a.y2);
+            ctx.stroke();
+          }
+          if (a.type === "arrow")
+            drawArrowHead(
+              ctx,
+              { x: a.x1, y: a.y1 },
+              { x: a.x2, y: a.y2 },
+              a.color,
+              a.width,
+            );
+        }
       } else if (
         a.type === "curve" ||
         a.type === "dashedCurve" ||
@@ -536,7 +722,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         ctx.lineWidth = a.width * 2.2;
         if (a.type === "dashedCurve")
           ctx.setLineDash([a.width * 3 + 6, a.width * 2 + 6]);
-        if (a.points && a.points.length >= 2) {
+        if (a.straightPoints && a.straightPoints.length > 1) {
+          smoothPath(ctx, a.straightPoints);
+          ctx.stroke();
+          if (a.type === "curvedArrow") {
+            const last = a.straightPoints[a.straightPoints.length - 1];
+            const prev = a.straightPoints[a.straightPoints.length - 2];
+            drawArrowHead(ctx, prev, last, a.color, a.width);
+          }
+        } else if (a.points && a.points.length >= 2) {
           smoothPath(ctx, a.points);
           ctx.stroke();
           if (a.type === "curvedArrow")
@@ -548,10 +742,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
               a.width,
             );
         } else if (a.x1 !== undefined) {
-          ctx.beginPath();
-          ctx.moveTo(a.x1, a.y1);
-          ctx.lineTo(a.x2, a.y2);
-          ctx.stroke();
+          const dx = a.x2 - a.x1;
+          if (Math.abs(dx) > TEX_SIZE * 0.5) {
+            const edgeX1 = a.x1 > a.x2 ? TEX_SIZE : 0;
+            const edgeX2 = a.x1 > a.x2 ? 0 : TEX_SIZE;
+            const midY = (a.y1 + a.y2) / 2;
+            ctx.beginPath();
+            ctx.moveTo(a.x1, a.y1);
+            ctx.lineTo(edgeX1, midY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(edgeX2, midY);
+            ctx.lineTo(a.x2, a.y2);
+            ctx.stroke();
+          } else {
+            ctx.beginPath();
+            ctx.moveTo(a.x1, a.y1);
+            ctx.lineTo(a.x2, a.y2);
+            ctx.stroke();
+          }
           if (a.type === "curvedArrow")
             drawArrowHead(
               ctx,
@@ -581,7 +791,10 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       }
       if (previewAction) renderAction2D(tctx, previewAction);
       texture.needsUpdate = true;
-      flatPreview.src = texCanvas.toDataURL("image/png");
+      if (!previewAction) {
+        flatPreview.src = texCanvas.toDataURL("image/png");
+      }
+      requestRender();
     }
 
     // --- 4. THREE.JS SCENE SETUP ---
@@ -595,27 +808,40 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       canvas: glcanvas,
       antialias: true,
       preserveDrawingBuffer: true,
+      powerPreference: "high-performance",
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 
     function resizeRenderer() {
       const rect = glcanvas.getBoundingClientRect();
       if (!rect || rect.width <= 0 || rect.height === 0) return;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
       renderer.setSize(rect.width, rect.height, false);
       camera.aspect = rect.width / rect.height;
       camera.updateProjectionMatrix();
+      requestRender();
     }
     window.addEventListener("resize", resizeRenderer, {
       signal: eventController.signal,
     });
 
+    const resizeObserver = new ResizeObserver(() => {
+      resizeRenderer();
+    });
+    if (glcanvas.parentElement) {
+      resizeObserver.observe(glcanvas.parentElement);
+    }
+
+    let nodeHighlightRing: any = null;
+    let refreshNodeView = () => {};
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0.3, 0);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.rotateSpeed = 0.5;
-    controls.zoomSpeed = 0.5;
-    controls.panSpeed = 0.5;
+    controls.dampingFactor = 0.18;
+    controls.rotateSpeed = 1.0;
+    controls.zoomSpeed = 1.0;
+    controls.panSpeed = 1.0;
     controls.minDistance = 1.2;
     controls.maxDistance = 10.0;
     controls.mouseButtons = {
@@ -623,6 +849,46 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.ROTATE,
     };
+
+    let isRotatingCamera = false;
+    let isCameraMoving = false;
+    let renderRequested = false;
+    let animId: number | null = null;
+
+    requestRender = () => {
+      if (!renderRequested) {
+        renderRequested = true;
+        animId = requestAnimationFrame(renderFrame);
+      }
+    };
+
+    function renderFrame() {
+      renderRequested = false;
+      animId = null;
+      const needsMoreFrames = controls.update();
+      renderer.render(scene, camera);
+      const stillMoving = needsMoreFrames || isRotatingCamera;
+      if (isCameraMoving && !stillMoving) {
+        refreshNodeView();
+      }
+      isCameraMoving = stillMoving;
+      if (stillMoving) {
+        requestRender();
+      }
+    }
+
+    controls.addEventListener("start", () => {
+      isRotatingCamera = true;
+      isCameraMoving = true;
+      if (nodeHighlightRing) nodeHighlightRing.visible = false;
+      guidedNodes?.hideRing();
+      requestRender();
+    });
+    controls.addEventListener("change", requestRender);
+    controls.addEventListener("end", () => {
+      isRotatingCamera = false;
+      markDirtyRef.current();
+    });
 
     scene.add(new THREE.AmbientLight(0xffffff, 1.2));
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -660,24 +926,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         cageGridGroup.visible = !cageGridGroup.visible;
         e.target.textContent = `🌐 Lồng Lưới: ${cageGridGroup.visible ? "BẬT" : "TẮT"}`;
         e.target.classList.toggle("toggle-on", cageGridGroup.visible);
+        requestRender();
       },
       { signal: eventController.signal },
     );
 
-    let isMeshFillVisible = true;
+    let runtimeMeshFillVisible = true;
     const toggleMeshFillBtn = document.getElementById("toggleMeshFillBtn")!;
     toggleMeshFillBtn.addEventListener(
       "click",
       () => {
-        isMeshFillVisible = !isMeshFillVisible;
-        guidedNodes?.setFillVisible(isMeshFillVisible);
+        runtimeMeshFillVisible = !runtimeMeshFillVisible;
+        guidedNodes?.setFillVisible(runtimeMeshFillVisible);
         scene.traverse((obj: any) => {
           if (obj.isMesh && obj.userData && obj.userData.isFillMesh) {
-            obj.visible = isMeshFillVisible;
+            obj.visible = runtimeMeshFillVisible;
           }
         });
-        toggleMeshFillBtn.textContent = `🎨 Màu Mảng: ${isMeshFillVisible ? "BẬT" : "TẮT"}`;
-        toggleMeshFillBtn.classList.toggle("toggle-on", isMeshFillVisible);
+        toggleMeshFillBtn.textContent = `🎨 Màu Mảng: ${runtimeMeshFillVisible ? "BẬT" : "TẮT"}`;
+        toggleMeshFillBtn.classList.toggle("toggle-on", runtimeMeshFillVisible);
+        requestRender();
       },
       { signal: eventController.signal },
     );
@@ -685,6 +953,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     drawBaseGuides();
     const texture = new THREE.CanvasTexture(texCanvas);
     texture.wrapS = THREE.RepeatWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
 
     const geoFallback = new THREE.SphereGeometry(1.05, 64, 48);
     const pos = geoFallback.attributes.position;
@@ -752,23 +1022,19 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           headMesh.visible = false;
           scene.add(root);
           paintTarget = bestMesh;
+          requestRender();
         }
       },
       undefined,
       () => {
         paintTarget = headMesh;
+        requestRender();
       },
     );
 
-    let animId: number;
-    function animate() {
-      animId = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-    animate();
     resizeRenderer();
     redrawTexture();
+    requestRender();
 
     // --- 5. RAYCASTING & TÍNH TOÁN TOẠ ĐỘ ---
     const raycaster = new THREE.Raycaster();
@@ -791,16 +1057,75 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         const normalMatrix = new THREE.Matrix3().getNormalMatrix(
           paintTarget.matrixWorld,
         );
-        const normal = hits[0].face.normal
+        let normal = hits[0].face.normal
           .clone()
           .applyMatrix3(normalMatrix)
           .normalize();
+
+        // Đảm bảo normal hướng ly tâm ra ngoài sọ manocanh, tránh đâm ngược vào trong
+        const headCenter = new THREE.Vector3(0, 0.35, 0);
+        const outVec = point.clone().sub(headCenter).normalize();
+        if (normal.dot(outVec) < 0.2) {
+          normal.lerp(outVec, 0.75).normalize();
+        }
+
         const uv = hits[0].uv
           ? { x: hits[0].uv.x * TEX_SIZE, y: (1 - hits[0].uv.y) * TEX_SIZE }
           : null;
         return { point, normal, uv };
       }
       return null;
+    }
+
+    const geodesicRaycaster = new THREE.Raycaster();
+
+    function getGeodesicPointsOnScalp(
+      p1: THREE.Vector3,
+      p2: THREE.Vector3,
+      startUV: { x: number; y: number },
+      endUV: { x: number; y: number },
+      steps = 14,
+    ): Array<{ x: number; y: number }> {
+      const headCenter = new THREE.Vector3(0, 0.35, 0);
+      const v1 = p1.clone().sub(headCenter);
+      const v2 = p2.clone().sub(headCenter);
+
+      const dir1 = v1.clone().normalize();
+      const dir2 = v2.clone().normalize();
+
+      const angle = dir1.angleTo(dir2);
+      if (angle < 0.01) return [{ x: startUV.x, y: startUV.y }, { x: endUV.x, y: endUV.y }];
+
+      const points: Array<{ x: number; y: number }> = [{ x: startUV.x, y: startUV.y }];
+      const sinAngle = Math.sin(angle);
+      const currentDir = new THREE.Vector3();
+      const rayOrigin = new THREE.Vector3();
+      const rayDir = new THREE.Vector3();
+
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        if (sinAngle > 0.0001) {
+          const w1 = Math.sin((1 - t) * angle) / sinAngle;
+          const w2 = Math.sin(t * angle) / sinAngle;
+          currentDir.copy(dir1).multiplyScalar(w1).addScaledVector(dir2, w2).normalize();
+        } else {
+          currentDir.copy(dir1).lerp(dir2, t).normalize();
+        }
+
+        // Bắn ray từ ngoài hướng vào tâm đầu C để lấy giao điểm mặt sọ ngoài
+        rayOrigin.copy(headCenter).addScaledVector(currentDir, 3.0);
+        rayDir.copy(currentDir).negate();
+        geodesicRaycaster.set(rayOrigin, rayDir);
+        const hits = geodesicRaycaster.intersectObject(paintTarget, false);
+        if (hits.length > 0 && hits[0].uv) {
+          points.push({
+            x: hits[0].uv.x * TEX_SIZE,
+            y: (1 - hits[0].uv.y) * TEX_SIZE,
+          });
+        }
+      }
+      points.push({ x: endUV.x, y: endUV.y });
+      return points;
     }
 
     function get3DPointAnywhere(e?: any) {
@@ -825,58 +1150,39 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       return null;
     }
 
-    function createAngleSprite(textStr: string) {
-      const canvas = document.createElement("canvas");
-      canvas.width = 160;
-      canvas.height = 64;
-      const ctx = canvas.getContext("2d")!;
-      ctx.font = 'bold 34px "Plus Jakarta Sans", sans-serif';
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 6;
-      ctx.strokeText(textStr, 80, 32);
-      ctx.fillStyle = "#1e293b";
-      ctx.fillText(textStr, 80, 32);
-
-      const tex = new THREE.CanvasTexture(canvas);
-      const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          map: tex,
-          depthTest: false,
-          transparent: true,
-        }),
-      );
-      sprite.scale.set(0.2, 0.08, 1);
-      sprite.renderOrder = 999;
-      return sprite;
-    }
-
-    function calculateAngleBetween2Lines(
-      posA: THREE.Vector3,
-      posB: THREE.Vector3,
-      posC: THREE.Vector3,
-    ) {
-      const vecBA = posA.clone().sub(posB).normalize();
-      const vecBC = posC.clone().sub(posB).normalize();
-      return Math.round(vecBA.angleTo(vecBC) * (180 / Math.PI));
-    }
-
     // --- 6. HỆ THỐNG DỰNG ĐA GIÁC 3D VÀ HỘP CẮT TÓC ---
     let active2DChain: any[] = [];
     let isPenDrawing = false;
     let penPoints: any[] = [];
+    let isDrawPreviewPending = false;
+    let pendingDrawHit: any = null;
     let activeChain3D: any[] = [];
     const allNodes3D: any[] = [];
     let previewLine3D: any = null;
     let previewAngleSprite: any = null;
-    let nodeHighlightRing: any = null;
+    nodeHighlightRing = null;
 
     const createdArrowObjects: any[] = [];
-    let activeTipChain: any[] = [];
     let autoRectStep = 0;
     let autoRectHitA: any = null;
     let autoRectMarkerA: any = null;
+
+    interface ConnectableTipData {
+      id: string;
+      topPos: THREE.Vector3;
+      scalpPos: THREE.Vector3;
+      normal: THREE.Vector3;
+      color?: string;
+      sourceType: "arrow" | "guidedNode";
+      rawObj: any;
+    }
+    let connectTipStart: ConnectableTipData | null = null;
+    let hoveredConnectTip: ConnectableTipData | null = null;
+    let previewConnectLine: THREE.Line | null = null;
+    let previewConnectQuadGroup: THREE.Group | null = null;
+    const connectTipsMarkersGroup = new THREE.Group();
+    connectTipsMarkersGroup.name = "connectTipsMarkersGroup";
+    scene.add(connectTipsMarkersGroup);
 
     let permStartHit: any = null;
     let permStep = 0;
@@ -887,7 +1193,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
 
     const ringGeo = new THREE.RingGeometry(0.03, 0.05, 24);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x2563eb,
+      color: 0xf59e0b,
       side: THREE.DoubleSide,
     });
     nodeHighlightRing = new THREE.Mesh(ringGeo, ringMat);
@@ -925,21 +1231,58 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       return bestIdx;
     }
 
-    function findNearbyArrowTip(screenRadiusPixels = 30) {
-      let bestIdx = -1,
-        minDistancePixels = screenRadiusPixels;
+    function getAllConnectableTips(): ConnectableTipData[] {
+      const tips: ConnectableTipData[] = [];
+      const seenIds = new Set<string>();
+
+      createdArrowObjects.forEach((arr) => {
+        if (!arr || !arr.topPos || !arr.scalpPos) return;
+        if (arr.group && arr.group.parent && arr.group.visible === false) return;
+        if (!seenIds.has(arr.id)) {
+          seenIds.add(arr.id);
+          tips.push({
+            id: arr.id,
+            topPos: arr.topPos,
+            scalpPos: arr.scalpPos,
+            normal: arr.normal || new THREE.Vector3(0, 1, 0),
+            color: arr.color,
+            sourceType: "arrow",
+            rawObj: arr,
+          });
+        }
+      });
+
+      if (guidedNodes) {
+        const gnList = guidedNodes.getNodesList();
+        gnList.forEach((gn) => {
+          if (!seenIds.has(gn.id)) {
+            seenIds.add(gn.id);
+            tips.push({
+              id: gn.id,
+              topPos: gn.tip,
+              scalpPos: gn.root,
+              normal: gn.normal,
+              color: gn.color,
+              sourceType: "guidedNode",
+              rawObj: gn,
+            });
+          }
+        });
+      }
+
+      return tips;
+    }
+
+    function findNearbyConnectableTip(screenRadiusPixels = 35): ConnectableTipData | null {
+      const tips = getAllConnectableTips();
+      let bestTip: ConnectableTipData | null = null;
+      let minDistance = screenRadiusPixels;
       const canvasRect = glcanvas.getBoundingClientRect();
       const tempVec = new THREE.Vector3();
 
-      createdArrowObjects.forEach((arrObj, idx) => {
-        if (
-          !arrObj.group ||
-          !arrObj.group.parent ||
-          arrObj.group.visible === false
-        )
-          return;
-        if (!isPointVisible(arrObj.topPos, camera, paintTarget)) return;
-        tempVec.copy(arrObj.topPos).project(camera);
+      tips.forEach((tip) => {
+        if (!isPointVisible(tip.topPos, camera, paintTarget)) return;
+        tempVec.copy(tip.topPos).project(camera);
         if (tempVec.z > 1) return;
         const tipScreenX = ((tempVec.x + 1) * canvasRect.width) / 2;
         const tipScreenY = ((-tempVec.y + 1) * canvasRect.height) / 2;
@@ -949,12 +1292,130 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           tipScreenX - mouseScreenX,
           tipScreenY - mouseScreenY,
         );
-        if (distPixels < minDistancePixels) {
-          minDistancePixels = distPixels;
-          bestIdx = idx;
+        if (distPixels < minDistance) {
+          minDistance = distPixels;
+          bestTip = tip;
         }
       });
-      return bestIdx;
+      return bestTip;
+    }
+
+    function updateConnectTipsSnapMarkers() {
+      while (connectTipsMarkersGroup.children.length > 0) {
+        const child = connectTipsMarkersGroup.children[0];
+        connectTipsMarkersGroup.remove(child);
+        disposeObjectRecursively(child);
+      }
+
+      if (mode !== "space" || active3DSubTool !== "connectTips") {
+        return;
+      }
+
+      const tips = getAllConnectableTips();
+      tips.forEach((tip) => {
+        const isStart = connectTipStart && connectTipStart.id === tip.id;
+        const isHovered = hoveredConnectTip && hoveredConnectTip.id === tip.id;
+
+        const markerGroup = new THREE.Group();
+        markerGroup.position.copy(tip.topPos);
+
+        let ringColor = 0x06b6d4; // Cyan neon
+        let sphereRadius = 0.022;
+        let ringOuterRadius = 0.045;
+
+        if (isStart) {
+          ringColor = 0xf59e0b; // Amber Gold cho Đỉnh 1 đã chọn
+          sphereRadius = 0.032;
+          ringOuterRadius = 0.058;
+        } else if (isHovered) {
+          ringColor = 0x10b981; // Emerald Green khi hút snap
+          sphereRadius = 0.028;
+          ringOuterRadius = 0.052;
+        }
+
+        const sphereGeo = new THREE.SphereGeometry(sphereRadius, 16, 12);
+        const sphereMat = new THREE.MeshBasicMaterial({
+          color: ringColor,
+          depthTest: true,
+        });
+        const sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+        markerGroup.add(sphereMesh);
+
+        const haloGeo = new THREE.SphereGeometry(ringOuterRadius, 16, 12);
+        const haloMat = new THREE.MeshBasicMaterial({
+          color: ringColor,
+          transparent: true,
+          opacity: isStart ? 0.45 : isHovered ? 0.35 : 0.2,
+          depthWrite: false,
+        });
+        const haloMesh = new THREE.Mesh(haloGeo, haloMat);
+        markerGroup.add(haloMesh);
+
+        connectTipsMarkersGroup.add(markerGroup);
+      });
+    }
+
+    function orientConnectTipsMarkers() {}
+
+    function findNearbyScalpSnap(screenRadiusPixels = 26): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+      if (!is2DSnapEnabled) return null;
+
+      const candidates: Array<{ point: THREE.Vector3; normal: THREE.Vector3 }> = [];
+      createdArrowObjects.forEach((arr) => {
+        if (arr.scalpPos) candidates.push({ point: arr.scalpPos, normal: arr.normal || new THREE.Vector3(0, 1, 0) });
+      });
+      if (guidedNodes) {
+        guidedNodes.getNodesList().forEach((gn) => {
+          candidates.push({ point: gn.root, normal: gn.normal });
+        });
+      }
+      allNodes3D.forEach((nd) => {
+        if (nd.pos) candidates.push({ point: nd.pos, normal: new THREE.Vector3(0, 1, 0) });
+      });
+      historyStack.forEach((item) => {
+        if (item.hitA?.point) {
+          candidates.push({
+            point: new THREE.Vector3(...item.hitA.point),
+            normal: new THREE.Vector3(...(item.hitA.normal || [0, 1, 0])),
+          });
+        }
+        if (item.hitB?.point) {
+          candidates.push({
+            point: new THREE.Vector3(...item.hitB.point),
+            normal: new THREE.Vector3(...(item.hitB.normal || [0, 1, 0])),
+          });
+        }
+        if (item.hit?.point) {
+          candidates.push({
+            point: new THREE.Vector3(...item.hit.point),
+            normal: new THREE.Vector3(...(item.hit.normal || [0, 1, 0])),
+          });
+        }
+        if (item.posA) candidates.push({ point: item.posA, normal: new THREE.Vector3(0, 1, 0) });
+        if (item.posB) candidates.push({ point: item.posB, normal: new THREE.Vector3(0, 1, 0) });
+      });
+
+      const canvasRect = glcanvas.getBoundingClientRect();
+      const tempVec = new THREE.Vector3();
+      let bestCandidate: { point: THREE.Vector3; normal: THREE.Vector3 } | null = null;
+      let minDistance = screenRadiusPixels;
+
+      candidates.forEach((cand) => {
+        if (!isPointVisible(cand.point, camera, paintTarget)) return;
+        tempVec.copy(cand.point).project(camera);
+        if (tempVec.z > 1) return;
+        const screenX = ((tempVec.x + 1) * canvasRect.width) / 2;
+        const screenY = ((-tempVec.y + 1) * canvasRect.height) / 2;
+        const mouseX = ((mouseNDC.x + 1) * canvasRect.width) / 2;
+        const mouseY = ((-mouseNDC.y + 1) * canvasRect.height) / 2;
+        const dist = Math.hypot(screenX - mouseX, screenY - mouseY);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestCandidate = cand;
+        }
+      });
+
+      return bestCandidate;
     }
 
     function createNodeMarker(posVec: THREE.Vector3, color: any) {
@@ -1012,54 +1473,29 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           depthWrite: false,
         }),
       );
-      mesh.visible = isMeshFillVisible;
+      mesh.visible = runtimeMeshFillVisible;
       mesh.userData = { isFillMesh: true };
       scene.add(mesh);
       return mesh;
     }
 
-    function create90DegreeArrow(
+    function createElevationArrow3D(
       hitScalp: any,
       length = 0.45,
+      angleDeg = 90,
+      dirDeg = 0,
       colorHex = "#2563eb",
       id: string = crypto.randomUUID(),
     ) {
-      const group = new THREE.Group();
-      const origin = hitScalp.point.clone();
-      const normal = hitScalp.normal.clone();
-      const topPos = origin.clone().addScaledVector(normal, length);
-
-      const baseMesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.02, 12, 12),
-        new THREE.MeshBasicMaterial({ color: colorHex }),
+      const arrowData = createElevationArrow3DHelper(
+        hitScalp,
+        length,
+        angleDeg,
+        dirDeg,
+        colorHex,
+        id,
+        scene,
       );
-      baseMesh.position.copy(origin);
-      group.add(baseMesh);
-
-      const lineGeo = new THREE.BufferGeometry().setFromPoints([
-        origin,
-        topPos,
-      ]);
-      group.add(
-        new THREE.Line(
-          lineGeo,
-          new THREE.LineBasicMaterial({ color: colorHex, linewidth: 3 }),
-        ),
-      );
-
-      const coneMesh = new THREE.Mesh(
-        new THREE.ConeGeometry(0.025, 0.08, 12),
-        new THREE.MeshBasicMaterial({ color: colorHex }),
-      );
-      coneMesh.position.copy(topPos);
-      coneMesh.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        normal,
-      );
-      group.add(coneMesh);
-
-      scene.add(group);
-      const arrowData = { id, scalpPos: origin, topPos, normal, group };
       createdArrowObjects.push(arrowData);
       return arrowData;
     }
@@ -1071,213 +1507,32 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       colorHex = "#2563eb",
       arrowIds: [string, string] = [crypto.randomUUID(), crypto.randomUUID()],
     ) {
-      const group = new THREE.Group();
-      const posA = hitA.point.clone(),
-        posB = hitB.point.clone();
-      const normA = hitA.normal.clone(),
-        normB = hitB.normal.clone();
-      const posA_top = posA.clone().addScaledVector(normA, length);
-      const posB_top = posB.clone().addScaledVector(normB, length);
-
-      const borderGeo = new THREE.BufferGeometry().setFromPoints([
-        posA,
-        posB,
-        posB_top,
-        posA_top,
-        posA,
-      ]);
-      group.add(
-        new THREE.Line(
-          borderGeo,
-          new THREE.LineBasicMaterial({ color: colorHex, linewidth: 3 }),
-        ),
+      const result = createAutoRectSection3DHelper(
+        hitA,
+        hitB,
+        length,
+        colorHex,
+        arrowIds,
+        runtimeMeshFillVisible,
+        scene,
       );
-
-      const vertices = new Float32Array([
-        posA.x,
-        posA.y,
-        posA.z,
-        posB.x,
-        posB.y,
-        posB.z,
-        posB_top.x,
-        posB_top.y,
-        posB_top.z,
-        posA.x,
-        posA.y,
-        posA.z,
-        posB_top.x,
-        posB_top.y,
-        posB_top.z,
-        posA_top.x,
-        posA_top.y,
-        posA_top.z,
-      ]);
-      const meshGeo = new THREE.BufferGeometry();
-      meshGeo.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-      meshGeo.computeVertexNormals();
-
-      const fillMesh = new THREE.Mesh(
-        meshGeo,
-        new THREE.MeshBasicMaterial({
-          color: colorHex,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.38,
-          depthWrite: false,
-        }),
-      );
-      fillMesh.visible = isMeshFillVisible;
-      fillMesh.userData = { isFillMesh: true };
-      group.add(fillMesh);
-
-      const spriteA = createAngleSprite("90°");
-      spriteA.position.copy(posA_top);
-      group.add(spriteA);
-      const spriteB = createAngleSprite("90°");
-      spriteB.position.copy(posB_top);
-      group.add(spriteB);
-
-      scene.add(group);
-      const tipA = {
-        id: arrowIds[0],
-        scalpPos: posA,
-        topPos: posA_top,
-        normal: normA,
-        group,
-      };
-      const tipB = {
-        id: arrowIds[1],
-        scalpPos: posB,
-        topPos: posB_top,
-        normal: normB,
-        group,
-      };
-      createdArrowObjects.push(tipA, tipB);
-      return { group, tipA, tipB };
+      createdArrowObjects.push(result.tipA, result.tipB);
+      return result;
     }
 
     function create3DBoxQuad(arrowA: any, arrowB: any, colorHex = "#2563eb") {
-      const boxGroup = new THREE.Group();
-      const posA_scalp = arrowA.scalpPos,
-        posA_top = arrowA.topPos;
-      const posB_scalp = arrowB.scalpPos,
-        posB_top = arrowB.topPos;
-
-      const borderGeo = new THREE.BufferGeometry().setFromPoints([
-        posA_scalp,
-        posB_scalp,
-        posB_top,
-        posA_top,
-        posA_scalp,
-      ]);
-      boxGroup.add(
-        new THREE.Line(
-          borderGeo,
-          new THREE.LineBasicMaterial({ color: colorHex, linewidth: 3 }),
-        ),
+      return create3DBoxQuadHelper(
+        arrowA,
+        arrowB,
+        colorHex,
+        runtimeMeshFillVisible,
+        scene,
       );
-
-      const vertices = new Float32Array([
-        posA_scalp.x,
-        posA_scalp.y,
-        posA_scalp.z,
-        posB_scalp.x,
-        posB_scalp.y,
-        posB_scalp.z,
-        posB_top.x,
-        posB_top.y,
-        posB_top.z,
-        posA_scalp.x,
-        posA_scalp.y,
-        posA_scalp.z,
-        posB_top.x,
-        posB_top.y,
-        posB_top.z,
-        posA_top.x,
-        posA_top.y,
-        posA_top.z,
-      ]);
-      const meshGeo = new THREE.BufferGeometry();
-      meshGeo.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
-      meshGeo.computeVertexNormals();
-
-      const fillMesh = new THREE.Mesh(
-        meshGeo,
-        new THREE.MeshBasicMaterial({
-          color: colorHex,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.38,
-          depthWrite: false,
-        }),
-      );
-      fillMesh.visible = isMeshFillVisible;
-      fillMesh.userData = { isFillMesh: true };
-      boxGroup.add(fillMesh);
-
-      scene.add(boxGroup);
-      return boxGroup;
     }
 
     // --- 7. UỐN TÓC 3D VÀ SÓNG ---
-    const rodColorMap: Record<string, number> = {
-      "16": 0xd97706,
-      "19": 0xdb2777,
-      "22": 0x2563eb,
-      "25": 0xea580c,
-    };
-
     function createPermRod3D(hitScalp: any, sizeMM = "19", angleDeg = 90) {
-      const group = new THREE.Group();
-      const radius = (parseFloat(sizeMM) / 1000) * 2.2;
-      const rodGeo = new THREE.CylinderGeometry(radius, radius, 0.38, 16);
-      const colorHex = rodColorMap[sizeMM] || 0xdb2777;
-      const rodMesh = new THREE.Mesh(
-        rodGeo,
-        new THREE.MeshStandardMaterial({
-          color: colorHex,
-          roughness: 0.4,
-          metalness: 0.2,
-        }),
-      );
-
-      const normal = hitScalp.normal.clone();
-      const upVec = new THREE.Vector3(0, 1, 0);
-      let dirVec = normal.clone();
-      if (angleDeg !== 90) {
-        const rotAxis = new THREE.Vector3()
-          .crossVectors(normal, upVec)
-          .normalize();
-        if (rotAxis.lengthSq() > 0.001) {
-          dirVec.applyAxisAngle(
-            rotAxis,
-            THREE.MathUtils.degToRad(90 - angleDeg),
-          );
-        }
-      }
-
-      const offsetPos = hitScalp.point
-        .clone()
-        .addScaledVector(dirVec, radius + 0.02);
-      rodMesh.position.copy(offsetPos);
-      rodMesh.quaternion.copy(
-        new THREE.Quaternion().setFromUnitVectors(
-          new THREE.Vector3(0, 1, 0),
-          dirVec,
-        ),
-      );
-      rodMesh.rotateZ(Math.PI / 2);
-      group.add(rodMesh);
-
-      const sprite = createAngleSprite(`#${sizeMM}`);
-      sprite.position.copy(
-        offsetPos.clone().addScaledVector(dirVec, radius + 0.08),
-      );
-      group.add(sprite);
-
-      scene.add(group);
-      return group;
+      return createPermRod3DHelper(hitScalp, sizeMM, angleDeg, scene);
     }
 
     function createStraightAxisPermWave3D(
@@ -1289,162 +1544,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       targetPos: any = null,
       rollDeg = 90,
     ) {
-      const group = new THREE.Group();
-      const origin = hitScalp.point.clone();
-      const normal = hitScalp.normal.clone();
-      let destPos = targetPos
-        ? targetPos.clone()
-        : origin.clone().addScaledVector(normal, length);
-
-      let strandVec = destPos.clone().sub(origin);
-      let mainDir = strandVec.clone().normalize();
-
-      let baseTangent = new THREE.Vector3()
-        .crossVectors(mainDir, normal)
-        .normalize();
-      if (baseTangent.lengthSq() < 0.001) {
-        baseTangent = new THREE.Vector3()
-          .crossVectors(mainDir, new THREE.Vector3(0, 1, 0))
-          .normalize();
-      }
-      let baseNormalOut = new THREE.Vector3()
-        .crossVectors(baseTangent, mainDir)
-        .normalize();
-      let sideVec = baseTangent.clone();
-      let upWaveVec = baseNormalOut.clone();
-
-      if (rollDeg !== 0) {
-        const rollRad = THREE.MathUtils.degToRad(rollDeg);
-        sideVec.applyAxisAngle(mainDir, rollRad);
-        upWaveVec.applyAxisAngle(mainDir, rollRad);
-      }
-
-      const points: THREE.Vector3[] = [];
-      const numSteps = 40;
-      for (let i = 0; i <= numSteps; i++) {
-        const t = i / numSteps;
-        const p_linear = origin.clone().lerp(destPos, t);
-        let waveVec = new THREE.Vector3();
-
-        if (waveType === "curlC") {
-          waveVec.addScaledVector(upWaveVec, Math.sin(t * Math.PI) * amp * 1.5);
-        } else if (waveType === "curlCHook") {
-          const cPart = Math.sin(t * Math.PI) * amp * 1.4;
-          const jHook =
-            t > 0.6 ? -Math.sin(((t - 0.6) / 0.4) * Math.PI) * amp * 1.1 : 0;
-          waveVec.addScaledVector(upWaveVec, cPart + jHook);
-        } else if (waveType === "curlS") {
-          waveVec.addScaledVector(upWaveVec, Math.sin(t * Math.PI * 2.5) * amp);
-        } else if (waveType === "curlJ") {
-          if (t > 0.5)
-            waveVec.addScaledVector(
-              upWaveVec,
-              Math.sin(((t - 0.5) / 0.5) * Math.PI * 0.5) * amp * 1.5,
-            );
-        } else if (waveType === "curlSpiral") {
-          const angle = t * Math.PI * 2 * 3;
-          waveVec.addScaledVector(sideVec, Math.cos(angle) * amp * 0.8);
-          waveVec.addScaledVector(upWaveVec, Math.sin(angle) * amp * 0.8);
-        } else if (waveType === "curlSpiralBase") {
-          const factor = Math.max(0, (0.7 - t) / 0.7);
-          const angle = t * Math.PI * 2 * 3;
-          waveVec.addScaledVector(
-            sideVec,
-            Math.cos(angle) * amp * 0.8 * factor,
-          );
-          waveVec.addScaledVector(
-            upWaveVec,
-            Math.sin(angle) * amp * 0.8 * factor,
-          );
-        } else if (waveType === "curlSpiralTip") {
-          const factor = t < 0.35 ? 0 : (t - 0.35) / 0.65;
-          const angle = (t - 0.35) * Math.PI * 2 * 3;
-          waveVec.addScaledVector(
-            sideVec,
-            Math.cos(angle) * amp * 0.9 * factor,
-          );
-          waveVec.addScaledVector(
-            upWaveVec,
-            Math.sin(angle) * amp * 0.9 * factor,
-          );
-        } else if (waveType === "curlHippie") {
-          const angle = t * Math.PI * 2 * 7;
-          waveVec.addScaledVector(sideVec, Math.cos(angle) * amp * 0.5);
-          waveVec.addScaledVector(upWaveVec, Math.sin(angle) * amp * 0.5);
-        } else if (waveType === "curlZigzag") {
-          const cycle = (t * 10) % 1;
-          const tri = cycle < 0.5 ? cycle * 4 - 1 : 3 - cycle * 4;
-          waveVec.addScaledVector(upWaveVec, tri * amp * 0.7);
-        } else if (waveType === "curlFingerWave") {
-          waveVec.addScaledVector(
-            upWaveVec,
-            Math.sin(t * Math.PI * 2) * amp * 1.6,
-          );
-          waveVec.addScaledVector(sideVec, Math.cos(t * Math.PI) * amp * 0.8);
-        } else {
-          waveVec.addScaledVector(upWaveVec, Math.sin(t * Math.PI * 2) * amp);
-        }
-
-        points.push(p_linear.clone().add(waveVec));
-      }
-
-      const tubeGeo = new THREE.TubeGeometry(
-        new THREE.CatmullRomCurve3(points),
-        40,
-        0.012,
-        8,
-        false,
+      return createStraightAxisPermWave3DHelper(
+        hitScalp,
+        waveType,
+        length,
+        amp,
+        colorHex,
+        targetPos,
+        rollDeg,
+        scene,
       );
-      group.add(
-        new THREE.Mesh(
-          tubeGeo,
-          new THREE.MeshStandardMaterial({
-            color: colorHex,
-            roughness: 0.5,
-            metalness: 0.1,
-          }),
-        ),
-      );
-
-      const coneMesh = new THREE.Mesh(
-        new THREE.ConeGeometry(0.025, 0.08, 12),
-        new THREE.MeshBasicMaterial({ color: colorHex }),
-      );
-      coneMesh.position.copy(destPos);
-      coneMesh.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        mainDir,
-      );
-      group.add(coneMesh);
-
-      scene.add(group);
-      return group;
     }
 
     function findIntersectedPermWave(e: any) {
       setMouseFromEvent(e);
-      raycaster.setFromCamera(mouseNDC, camera);
-      const waveMeshes: any[] = [];
-      const indexMap = new Map();
-
-      historyStack.forEach((item, idx) => {
-        if (
-          item.kind === "straightPermWave" &&
-          item.group &&
-          item.group.visible
-        ) {
-          item.group.traverse((child: any) => {
-            if (child.isMesh) {
-              waveMeshes.push(child);
-              indexMap.set(child, idx);
-            }
-          });
-        }
-      });
-
-      const intersects = raycaster.intersectObjects(waveMeshes, false);
-      if (intersects.length > 0) return indexMap.get(intersects[0].object);
-      return -1;
+      return findIntersectedPermWaveHelper(
+        mouseNDC,
+        camera,
+        raycaster,
+        historyStack,
+      );
     }
 
     function triggerPermPreviewUpdate() {
@@ -1483,6 +1602,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           );
         }
       }
+      requestRender();
     }
 
     if (waveRollPicker) {
@@ -1498,6 +1618,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     function resetChainState() {
       guidedNodes?.breakChain();
       active2DChain = [];
+      isDrawPreviewPending = false;
+      pendingDrawHit = null;
       isPenDrawing = false;
       penPoints = [];
       permStartHit = null;
@@ -1510,13 +1632,23 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         previewPermGroup = null;
       }
       activeChain3D = [];
-      activeTipChain = [];
       autoRectStep = 0;
       autoRectHitA = null;
       if (autoRectMarkerA) {
         disposeObjectRecursively(autoRectMarkerA);
         autoRectMarkerA = null;
       }
+      connectTipStart = null;
+      hoveredConnectTip = null;
+      if (previewConnectLine) {
+        disposeObjectRecursively(previewConnectLine);
+        previewConnectLine = null;
+      }
+      if (previewConnectQuadGroup) {
+        disposeObjectRecursively(previewConnectQuadGroup);
+        previewConnectQuadGroup = null;
+      }
+      updateConnectTipsSnapMarkers();
       if (previewLine3D) {
         disposeObjectRecursively(previewLine3D);
         previewLine3D = null;
@@ -1564,6 +1696,19 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           if (itm.arrowData) disposeObjectRecursively(itm.arrowData.group);
           if (itm.boxGroup) disposeObjectRecursively(itm.boxGroup);
           if (itm.group) disposeObjectRecursively(itm.group);
+          // Dọn zombie tipA/tipB khỏi mảng createdArrowObjects
+          if (itm.tipA) {
+            const idxA = createdArrowObjects.indexOf(itm.tipA);
+            if (idxA !== -1) createdArrowObjects.splice(idxA, 1);
+          }
+          if (itm.tipB) {
+            const idxB = createdArrowObjects.indexOf(itm.tipB);
+            if (idxB !== -1) createdArrowObjects.splice(idxB, 1);
+          }
+          if (itm.arrowData) {
+            const idxArr = createdArrowObjects.indexOf(itm.arrowData);
+            if (idxArr !== -1) createdArrowObjects.splice(idxArr, 1);
+          }
         });
         historyStack.length = timelineIndex;
       }
@@ -1589,6 +1734,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         if (item.group) item.group.visible = isVisible;
       }
       redrawTexture();
+      updateConnectTipsSnapMarkers();
       if (trackChange) markDirtyRef.current();
     }
 
@@ -1692,11 +1838,13 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             .add(controls.target);
           controls.update();
         }
+        requestRender();
       },
       push: (entry) => {
         stopPlayback();
         pushHistory(entry);
       },
+      onRequestRender: requestRender,
     });
     updateTimelineUI();
     function updateNodeTool() {
@@ -1705,12 +1853,72 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         active3DSubTool === "node3d" &&
         nodePlacementMode.value === "guided";
       guidedNodes?.setEnabled(guided);
-      if (mode === "space" && active3DSubTool === "node3d") {
-        modeHint.textContent = guided
-          ? "Chọn chân tóc trên đầu → chỉnh góc / độ dài ở bên phải → Đặt điểm. Bấm điểm cũ để sửa."
-          : "Nâng cao: đặt điểm tự do. Ngoài đầu, điểm nằm trên mặt phẳng theo góc nhìn. Shift: khóa góc 90°.";
+
+      const arrowSettings = document.getElementById("groupArrowSettings");
+      if (arrowSettings) {
+        arrowSettings.style.display =
+          mode === "space" && active3DSubTool === "arrow90" ? "" : "none";
+      }
+
+      updateConnectTipsSnapMarkers();
+
+      if (mode === "space") {
+        if (active3DSubTool === "node3d") {
+          modeHint.textContent = guided
+            ? "Chọn chân tóc trên đầu → chỉnh góc / độ dài ở bên phải → Đặt điểm. Bấm điểm cũ để sửa."
+            : "Nâng cao: đặt điểm tự do. Ngoài đầu, điểm nằm trên mặt phẳng theo góc nhìn. Shift: khóa góc 90°.";
+        } else if (active3DSubTool === "autoRect3D") {
+          modeHint.textContent =
+            "⚡ Mảng Hộp 90°: Rê chuột lại gần mốc cũ để hít dính (Snap) ➔ Click điểm A, click điểm B để tạo mảng!";
+        } else if (active3DSubTool === "arrow90") {
+          modeHint.textContent =
+            "🏹 Mũi Tên Góc Tự Do: Chỉnh góc nâng và hướng ngả ở cột phải ➔ Click lên da đầu để cắm hướng nâng!";
+        } else if (active3DSubTool === "connectTips") {
+          modeHint.textContent =
+            "🔗 Nối Đỉnh Hộp: Di chuột tới các đỉnh phát sáng (Snap) và click Đỉnh 1, sau đó click Đỉnh 2 để nối mảng!";
+        }
       }
     }
+
+    const arrowAngleInput = document.getElementById(
+      "arrowAngle",
+    ) as HTMLInputElement | null;
+    const arrowAngleValue = document.getElementById("arrowAngleValue");
+    if (arrowAngleInput && arrowAngleValue) {
+      arrowAngleInput.addEventListener(
+        "input",
+        () => {
+          arrowAngleValue.textContent = `${arrowAngleInput.value}°`;
+          document
+            .querySelectorAll<HTMLButtonElement>("[data-arrow-angle]")
+            .forEach((b) => {
+              b.classList.toggle(
+                "active",
+                b.dataset.arrowAngle === arrowAngleInput.value,
+              );
+            });
+        },
+        { signal: eventController.signal },
+      );
+    }
+    document
+      .querySelectorAll<HTMLButtonElement>("[data-arrow-angle]")
+      .forEach((btn) => {
+        btn.addEventListener(
+          "click",
+          () => {
+            if (arrowAngleInput && arrowAngleValue) {
+              arrowAngleInput.value = btn.dataset.arrowAngle!;
+              arrowAngleValue.textContent = `${arrowAngleInput.value}°`;
+              document
+                .querySelectorAll<HTMLButtonElement>("[data-arrow-angle]")
+                .forEach((b) => b.classList.remove("active"));
+              btn.classList.add("active");
+            }
+          },
+          { signal: eventController.signal },
+        );
+      });
     nodePlacementMode.addEventListener(
       "change",
       () => {
@@ -1719,8 +1927,10 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       },
       { signal: eventController.signal },
     );
-    const refreshNodeView = () => guidedNodes?.viewChanged();
-    controls.addEventListener("change", refreshNodeView);
+    refreshNodeView = () => {
+      guidedNodes?.viewChanged();
+      orientConnectTipsMarkers();
+    };
     glcanvas.addEventListener("pointerleave", refreshNodeView, {
       signal: eventController.signal,
     });
@@ -1804,12 +2014,29 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             return;
           }
 
+          const currentPt = {
+            x: currentUV.x,
+            y: currentUV.y,
+            point3D: hit.point.clone(),
+          };
+
           if (active2DChain.length >= 3) {
             const startA = active2DChain[0];
             if (
               Math.hypot(currentUV.x - startA.x, currentUV.y - startA.y) < 25
             ) {
               const lastPt = active2DChain[active2DChain.length - 1];
+              let closeStraightPts: Array<{ x: number; y: number }> | undefined = undefined;
+              if (draw2DPathMode === "straight" && lastPt.point3D && startA.point3D) {
+                const geo = getGeodesicPointsOnScalp(
+                  lastPt.point3D,
+                  startA.point3D,
+                  { x: lastPt.x, y: lastPt.y },
+                  { x: startA.x, y: startA.y },
+                  14,
+                );
+                if (geo.length > 1) closeStraightPts = geo;
+              }
               pushHistory({
                 kind: "texture",
                 action: {
@@ -1820,16 +2047,38 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
                   y2: startA.y,
                   color: colorHex,
                   width,
+                  pathMode: draw2DPathMode,
+                  straightPoints: closeStraightPts,
                 },
               });
               resetChainState();
               modeHint.textContent = "🎉 Đã khép kín phân khu 2D da đầu!";
+              redrawTexture();
               return;
             }
           }
 
           if (active2DChain.length > 0) {
             const lastPt = active2DChain[active2DChain.length - 1];
+            let straightPts: Array<{ x: number; y: number }> | undefined = undefined;
+            if (draw2DPathMode === "straight" && lastPt.point3D && hit.point) {
+              const geo = getGeodesicPointsOnScalp(
+                lastPt.point3D,
+                hit.point,
+                { x: lastPt.x, y: lastPt.y },
+                { x: currentUV.x, y: currentUV.y },
+                14,
+              );
+              if (geo.length > 1) {
+                straightPts = geo;
+              }
+            }
+
+            let curvePoints: Array<{ x: number; y: number }> | undefined = undefined;
+            if (current2DTool === "curve" || current2DTool === "dashedCurve") {
+              curvePoints = [...active2DChain.map((p) => ({ x: p.x, y: p.y })), { x: currentUV.x, y: currentUV.y }];
+            }
+
             pushHistory({
               kind: "texture",
               action: {
@@ -1838,13 +2087,23 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
                 y1: lastPt.y,
                 x2: currentUV.x,
                 y2: currentUV.y,
+                points: curvePoints,
                 color: colorHex,
                 width,
+                pathMode: draw2DPathMode,
+                straightPoints: straightPts,
               },
             });
+            active2DChain.push(currentPt);
+            modeHint.textContent = `✏️ Đã nối ${active2DChain.length} điểm 2D da đầu (${draw2DPathMode === "straight" ? "Thẳng đỉnh đầu" : "Cong ôm sọ"})!`;
+          } else {
+            active2DChain.push(currentPt);
+            modeHint.textContent = `✏️ Đã chọn điểm 1 (${draw2DPathMode === "straight" ? "Thẳng đỉnh đầu" : "Cong ôm sọ"}). Click điểm tiếp theo!`;
           }
-          active2DChain.push(currentUV);
-          modeHint.textContent = `✏️ Đã nối ${active2DChain.length} điểm 2D da đầu! (Phím B ngắt)...`;
+          if (previewLine3D) {
+            disposeObjectRecursively(previewLine3D);
+            previewLine3D = null;
+          }
           redrawTexture();
         } else if (mode === "space") {
           if (active3DSubTool === "node3d") {
@@ -1958,15 +2217,18 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
               colorHex,
             });
           } else if (active3DSubTool === "autoRect3D") {
-            const hitScalp = getScalpSurfaceHit(e);
-            if (!hitScalp) return;
+            const rawHitScalp = getScalpSurfaceHit(e);
+            if (!rawHitScalp) return;
+            const snapHit = findNearbyScalpSnap();
+            const hitScalp = snapHit || rawHitScalp;
 
             if (autoRectStep === 0) {
               autoRectHitA = hitScalp;
               autoRectMarkerA = createNodeMarker(autoRectHitA.point, colorHex);
               autoRectStep = 1;
-              modeHint.textContent =
-                "⚡ Đã chọn điểm A! Click chọn điểm B để kéo Hộp 90°...";
+              modeHint.textContent = snapHit
+                ? "🧲 Đã hít dính điểm A vào mốc! Click chọn điểm B để kéo Hộp..."
+                : "⚡ Đã chọn điểm A! Click chọn điểm B để kéo Hộp 90°...";
             } else {
               if (autoRectMarkerA) {
                 disposeObjectRecursively(autoRectMarkerA);
@@ -1997,14 +2259,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
               });
               autoRectStep = 0;
               autoRectHitA = null;
-              modeHint.textContent = "🎉 Đã tạo Mảng Hộp Vuốt Thẳng 90°!";
+              modeHint.textContent = snapHit
+                ? "🎉 Đã tạo Mảng Hộp Vuốt Thẳng (Đã hít dính liền mạch)!"
+                : "🎉 Đã tạo Mảng Hộp Vuốt Thẳng 90°!";
             }
           } else if (active3DSubTool === "arrow90") {
-            const hitScalp = getScalpSurfaceHit(e);
-            if (!hitScalp) return;
-            const arrowData = create90DegreeArrow(
+            const rawHitScalp = getScalpSurfaceHit(e);
+            if (!rawHitScalp) return;
+            const snapHit = findNearbyScalpSnap();
+            const hitScalp = snapHit || rawHitScalp;
+
+            const arrowAngleInput = document.getElementById("arrowAngle") as HTMLInputElement | null;
+            const arrowDirInput = document.getElementById("arrowDirection") as HTMLSelectElement | null;
+            const angleDeg = arrowAngleInput ? parseFloat(arrowAngleInput.value) : 90;
+            const dirDeg = arrowDirInput ? parseFloat(arrowDirInput.value) : 0;
+
+            const arrowData = createElevationArrow3D(
               hitScalp,
               extrudeLen,
+              angleDeg,
+              dirDeg,
               colorHex,
             );
             pushHistory({
@@ -2016,32 +2290,78 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
                 normal: hitScalp.normal.toArray(),
               },
               length: extrudeLen,
+              angleDeg,
+              dirDeg,
               colorHex,
             });
+            modeHint.textContent = `🏹 Đã cắm Mũi Tên Hướng Nâng ${angleDeg}° (Vươn ${(extrudeLen * 100).toFixed(0)}cm)!`;
           } else if (active3DSubTool === "connectTips") {
-            const nearTipIdx = findNearbyArrowTip();
-            if (nearTipIdx < 0) return;
-            const targetArrow = createdArrowObjects[nearTipIdx];
-            if (activeTipChain.length > 0) {
-              const lastArrow = activeTipChain[activeTipChain.length - 1];
-              if (lastArrow !== targetArrow) {
-                const boxGroup = create3DBoxQuad(
-                  lastArrow,
-                  targetArrow,
-                  colorHex,
-                );
-                pushHistory({
-                  kind: "boxQuad",
-                  boxGroup,
-                  arrowA: lastArrow,
-                  arrowB: targetArrow,
-                  arrowAId: lastArrow.id,
-                  arrowBId: targetArrow.id,
-                  colorHex,
-                });
+            const clickedTip = findNearbyConnectableTip(35);
+            if (!connectTipStart) {
+              if (clickedTip) {
+                connectTipStart = clickedTip;
+                modeHint.textContent = `📍 Đã chọn Đỉnh 1! Rê chuột và click chọn Đỉnh 2 để nối mảng (Esc hoặc 'Ngắt chuỗi' để hủy).`;
+                updateConnectTipsSnapMarkers();
+                requestRender();
+              } else {
+                modeHint.textContent = "⚠️ Hãy click vào một đỉnh sáng màu (Snap) để bắt đầu nối mảng!";
+              }
+            } else {
+              if (clickedTip) {
+                if (clickedTip.id === connectTipStart.id) {
+                  connectTipStart = null;
+                  if (previewConnectLine) previewConnectLine.visible = false;
+                  if (previewConnectQuadGroup) previewConnectQuadGroup.visible = false;
+                  modeHint.textContent = "Đã bỏ chọn đỉnh. Click vào một đỉnh khác để bắt đầu nối.";
+                  updateConnectTipsSnapMarkers();
+                  requestRender();
+                } else {
+                  const arrowA = {
+                    id: connectTipStart.id,
+                    group: null,
+                    scalpPos: connectTipStart.scalpPos,
+                    topPos: connectTipStart.topPos,
+                    normal: connectTipStart.normal,
+                    color: connectTipStart.color || colorHex,
+                  };
+                  const arrowB = {
+                    id: clickedTip.id,
+                    group: null,
+                    scalpPos: clickedTip.scalpPos,
+                    topPos: clickedTip.topPos,
+                    normal: clickedTip.normal,
+                    color: clickedTip.color || colorHex,
+                  };
+                  const boxGroup = create3DBoxQuad(arrowA, arrowB, colorHex);
+                  pushHistory({
+                    kind: "boxQuad",
+                    boxGroup,
+                    arrowA,
+                    arrowB,
+                    arrowAId: arrowA.id,
+                    arrowBId: arrowB.id,
+                    posA_scalp: arrowA.scalpPos.toArray(),
+                    posA_top: arrowA.topPos.toArray(),
+                    posB_scalp: arrowB.scalpPos.toArray(),
+                    posB_top: arrowB.topPos.toArray(),
+                    colorHex,
+                  });
+                  modeHint.textContent = "🎉 Đã tạo mảng nối 3D thành công! Tiếp tục click đỉnh tiếp theo để nối tiếp, hoặc bấm B/Esc để ngắt.";
+                  connectTipStart = clickedTip;
+                  if (previewConnectLine) previewConnectLine.visible = false;
+                  if (previewConnectQuadGroup) previewConnectQuadGroup.visible = false;
+                  updateConnectTipsSnapMarkers();
+                  requestRender();
+                }
+              } else {
+                connectTipStart = null;
+                if (previewConnectLine) previewConnectLine.visible = false;
+                if (previewConnectQuadGroup) previewConnectQuadGroup.visible = false;
+                modeHint.textContent = "Đã hủy chọn. Click vào một đỉnh để bắt đầu nối lại.";
+                updateConnectTipsSnapMarkers();
+                requestRender();
               }
             }
-            activeTipChain.push(targetArrow);
           }
         } else if (mode === "perm") {
           if (activePermSubTool === "permRod") {
@@ -2150,7 +2470,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     glcanvas.addEventListener(
       "pointermove",
       (e) => {
-        if (e.buttons === 2) return;
+        if (isRotatingCamera || isCameraMoving || (e.buttons & 2) !== 0 || (e.buttons & 4) !== 0) return;
         setMouseFromEvent(e);
 
         if (mode === "draw") {
@@ -2168,16 +2488,62 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             return;
           }
           if (active2DChain.length > 0) {
-            const lastPt = active2DChain[active2DChain.length - 1];
-            redrawTexture({
-              type: current2DTool,
-              x1: lastPt.x,
-              y1: lastPt.y,
-              x2: hit.uv.x,
-              y2: hit.uv.y,
-              color: colorPicker.value,
-              width: parseInt(widthPicker.value, 10),
-            });
+            if (previewLine3D) {
+              disposeObjectRecursively(previewLine3D);
+              previewLine3D = null;
+            }
+            pendingDrawHit = hit;
+            if (!isDrawPreviewPending) {
+              isDrawPreviewPending = true;
+              requestAnimationFrame(() => {
+                isDrawPreviewPending = false;
+                if (!pendingDrawHit || active2DChain.length === 0) return;
+                const currentHit = pendingDrawHit;
+                const lastPt = active2DChain[active2DChain.length - 1];
+                if (!lastPt) return;
+
+                let previewStraightPts: Array<{ x: number; y: number }> | undefined = undefined;
+                if (draw2DPathMode === "straight" && lastPt.point3D && currentHit.point) {
+                  const geo = getGeodesicPointsOnScalp(
+                    lastPt.point3D,
+                    currentHit.point,
+                    { x: lastPt.x, y: lastPt.y },
+                    { x: currentHit.uv.x, y: currentHit.uv.y },
+                    4,
+                  );
+                  if (geo.length > 1) previewStraightPts = geo;
+                }
+
+                if (current2DTool === "curve" || current2DTool === "dashedCurve") {
+                  const previewPoints = [
+                    ...active2DChain.map((p) => ({ x: p.x, y: p.y })),
+                    { x: currentHit.uv.x, y: currentHit.uv.y },
+                  ];
+                  redrawTexture({
+                    type: current2DTool,
+                    points: previewPoints,
+                    x1: lastPt.x,
+                    y1: lastPt.y,
+                    x2: currentHit.uv.x,
+                    y2: currentHit.uv.y,
+                    straightPoints: previewStraightPts,
+                    color: colorPicker.value,
+                    width: parseInt(widthPicker.value, 10),
+                  });
+                } else {
+                  redrawTexture({
+                    type: current2DTool,
+                    x1: lastPt.x,
+                    y1: lastPt.y,
+                    x2: currentHit.uv.x,
+                    y2: currentHit.uv.y,
+                    straightPoints: previewStraightPts,
+                    color: colorPicker.value,
+                    width: parseInt(widthPicker.value, 10),
+                  });
+                }
+              });
+            }
           }
         } else if (mode === "space") {
           if (active3DSubTool === "node3d") {
@@ -2191,16 +2557,23 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
               );
             }
             if (!point3D) {
-              nodeHighlightRing.visible = false;
+              if (nodeHighlightRing.visible) {
+                nodeHighlightRing.visible = false;
+                requestRender();
+              }
               return;
             }
             const nearIdx = findNearby3DNode(point3D);
             if (nearIdx >= 0) {
               nodeHighlightRing.position.copy(allNodes3D[nearIdx].pos);
               nodeHighlightRing.lookAt(camera.position);
-              nodeHighlightRing.visible = true;
-            } else {
+              if (!nodeHighlightRing.visible) {
+                nodeHighlightRing.visible = true;
+                requestRender();
+              }
+            } else if (nodeHighlightRing.visible) {
               nodeHighlightRing.visible = false;
+              requestRender();
             }
 
             if (activeChain3D.length > 0) {
@@ -2226,6 +2599,143 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
                 previewLine3D.geometry = geo;
               }
               previewLine3D.computeLineDistances();
+              requestRender();
+            }
+          } else if (
+            active3DSubTool === "autoRect3D" ||
+            active3DSubTool === "arrow90"
+          ) {
+            const snapHit = findNearbyScalpSnap();
+            if (snapHit) {
+              nodeHighlightRing.position.copy(snapHit.point);
+              nodeHighlightRing.lookAt(camera.position);
+              if (!nodeHighlightRing.visible) {
+                nodeHighlightRing.visible = true;
+                requestRender();
+              }
+            } else if (nodeHighlightRing.visible) {
+              nodeHighlightRing.visible = false;
+              requestRender();
+            }
+
+            // Preview đường nối mảng hộp 90°
+            const anchorPoint =
+              autoRectStep === 1 && autoRectHitA
+                ? autoRectHitA.point
+                : null;
+
+            if (anchorPoint) {
+              const previewTarget = snapHit?.point || getScalpSurfaceHit(e)?.point;
+              if (previewTarget) {
+                const geo = new THREE.BufferGeometry().setFromPoints([
+                  anchorPoint,
+                  previewTarget,
+                ]);
+                if (!previewLine3D) {
+                  previewLine3D = new THREE.Line(
+                    geo,
+                    new THREE.LineDashedMaterial({
+                      color: 0xf59e0b,
+                      dashSize: 0.04,
+                      gapSize: 0.02,
+                    }),
+                  );
+                  scene.add(previewLine3D);
+                } else {
+                  previewLine3D.geometry.dispose();
+                  previewLine3D.geometry = geo;
+                }
+                previewLine3D.computeLineDistances();
+                requestRender();
+              }
+            }
+          } else if (active3DSubTool === "connectTips") {
+            const nearTip = findNearbyConnectableTip(35);
+            if (nearTip?.id !== hoveredConnectTip?.id) {
+              hoveredConnectTip = nearTip;
+              updateConnectTipsSnapMarkers();
+              requestRender();
+            }
+
+            if (hoveredConnectTip) {
+              nodeHighlightRing.position.copy(hoveredConnectTip.topPos);
+              nodeHighlightRing.lookAt(camera.position);
+              if (!nodeHighlightRing.visible) {
+                nodeHighlightRing.visible = true;
+                requestRender();
+              }
+            } else if (nodeHighlightRing.visible) {
+              nodeHighlightRing.visible = false;
+              requestRender();
+            }
+
+            if (connectTipStart) {
+              const targetPos =
+                hoveredConnectTip && hoveredConnectTip.id !== connectTipStart.id
+                  ? hoveredConnectTip.topPos
+                  : (get3DPointAnywhere(e) || null);
+
+              if (targetPos) {
+                const geo = new THREE.BufferGeometry().setFromPoints([
+                  connectTipStart.topPos,
+                  targetPos,
+                ]);
+                if (!previewConnectLine) {
+                  previewConnectLine = new THREE.Line(
+                    geo,
+                    new THREE.LineDashedMaterial({
+                      color: 0x00f2fe,
+                      dashSize: 0.03,
+                      gapSize: 0.015,
+                    }),
+                  );
+                  scene.add(previewConnectLine);
+                } else {
+                  previewConnectLine.geometry.dispose();
+                  previewConnectLine.geometry = geo;
+                  previewConnectLine.visible = true;
+                }
+                previewConnectLine.computeLineDistances();
+
+                if (hoveredConnectTip && hoveredConnectTip.id !== connectTipStart.id) {
+                  const quadPts = [
+                    connectTipStart.scalpPos,
+                    hoveredConnectTip.scalpPos,
+                    hoveredConnectTip.topPos,
+                    connectTipStart.topPos,
+                    connectTipStart.scalpPos,
+                  ];
+                  const quadGeo = new THREE.BufferGeometry().setFromPoints(quadPts);
+                  if (!previewConnectQuadGroup) {
+                    previewConnectQuadGroup = new THREE.Group();
+                    const quadLine = new THREE.Line(
+                      quadGeo,
+                      new THREE.LineDashedMaterial({
+                        color: 0xfbbf24,
+                        dashSize: 0.04,
+                        gapSize: 0.02,
+                      }),
+                    );
+                    quadLine.computeLineDistances();
+                    previewConnectQuadGroup.add(quadLine);
+                    scene.add(previewConnectQuadGroup);
+                  } else {
+                    const l = previewConnectQuadGroup.children[0] as THREE.Line;
+                    if (l) {
+                      l.geometry.dispose();
+                      l.geometry = quadGeo;
+                      l.computeLineDistances();
+                    }
+                    previewConnectQuadGroup.visible = true;
+                  }
+                } else if (previewConnectQuadGroup) {
+                  previewConnectQuadGroup.visible = false;
+                }
+                requestRender();
+              }
+            } else {
+              if (previewConnectLine) previewConnectLine.visible = false;
+              if (previewConnectQuadGroup) previewConnectQuadGroup.visible = false;
             }
           }
         } else if (mode === "perm") {
@@ -2277,6 +2787,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         if (["TEXTAREA", "INPUT", "SELECT"].includes(focusedTag)) return;
         const k = e.key.toLowerCase();
         if (k === "b" || e.key === "Escape") resetChainState();
+        if ((e.ctrlKey || e.metaKey) && k === "s") {
+          e.preventDefault();
+          if (!activeProjectRef.current) {
+            setIsSaveNewProjectModalOpen(true);
+          } else {
+            void saveActiveProject().catch(() => undefined);
+          }
+          return;
+        }
         if ((e.ctrlKey || e.metaKey) && k === "z" && !e.shiftKey) {
           e.preventDefault();
           undoHistory();
@@ -2293,22 +2812,32 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         if (k === "w") {
           camera.position.set(0, 0.5, 4.3);
           controls.target.set(0, 0.3, 0);
+          controls.update();
+          requestRender();
         }
         if (k === "a") {
           camera.position.set(4.3, 0.5, 0);
           controls.target.set(0, 0.3, 0);
+          controls.update();
+          requestRender();
         }
         if (k === "s") {
           camera.position.set(0, 0.5, -4.3);
           controls.target.set(0, 0.3, 0);
+          controls.update();
+          requestRender();
         }
         if (k === "d") {
           camera.position.set(-4.3, 0.5, 0);
           controls.target.set(0, 0.3, 0);
+          controls.update();
+          requestRender();
         }
         if (k === "t") {
           camera.position.set(0, 4.3, 0.3);
           controls.target.set(0, 0.3, 0);
+          controls.update();
+          requestRender();
         }
       },
       { signal: eventController.signal },
@@ -2443,6 +2972,59 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         signal: eventController.signal,
       });
 
+    const pathModeCurvedBtn = document.getElementById("pathModeCurved");
+    const pathModeStraightBtn = document.getElementById("pathModeStraight");
+    const sectionLineModeSelect = document.getElementById("sectionLineMode") as HTMLSelectElement | null;
+
+    function set2DPathMode(newMode: "curved" | "straight") {
+      draw2DPathMode = newMode;
+      pathModeCurvedBtn?.classList.toggle("active", newMode === "curved");
+      pathModeStraightBtn?.classList.toggle("active", newMode === "straight");
+      if (sectionLineModeSelect) {
+        if (newMode === "curved") sectionLineModeSelect.value = "texture-curved";
+        else sectionLineModeSelect.value = "texture-straight";
+      }
+      modeHint.textContent =
+        newMode === "straight"
+          ? "📏 Chế độ vẽ 2D: Thẳng đỉnh đầu (Nét thẳng tắp qua đỉnh sọ / Chia ngôi chuẩn)!"
+          : "〰️ Chế độ vẽ 2D: Cong ôm sọ (Nét uốn lượn ôm sát theo khuôn đầu)!";
+    }
+
+    pathModeCurvedBtn?.addEventListener(
+      "click",
+      () => set2DPathMode("curved"),
+      { signal: eventController.signal },
+    );
+    pathModeStraightBtn?.addEventListener(
+      "click",
+      () => {
+        set2DPathMode("straight");
+        if (current2DTool === "curve" || current2DTool === "dashedCurve") {
+          current2DTool = "line";
+          document.querySelectorAll(".tool").forEach((b) => {
+            b.classList.toggle("active", (b as HTMLElement).dataset.tool === "line");
+          });
+        }
+      },
+      { signal: eventController.signal },
+    );
+
+    if (sectionLineModeSelect) {
+      sectionLineModeSelect.addEventListener(
+        "change",
+        () => {
+          if (sectionLineModeSelect.value === "texture-curved") {
+            set2DPathMode("curved");
+            document.getElementById("modeDraw")?.click();
+          } else if (sectionLineModeSelect.value === "texture-straight") {
+            set2DPathMode("straight");
+            document.getElementById("modeDraw")?.click();
+          }
+        },
+        { signal: eventController.signal },
+      );
+    }
+
     clearBtn.addEventListener(
       "click",
       () => {
@@ -2493,6 +3075,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         pdf.setFontSize(16);
         pdf.text("HAIRTECH 3D — SO DO KY THUAT 3D", 30, 36);
         pdf.addImage(glcanvas.toDataURL("image/png"), "PNG", 30, 50, 535, 360);
+        // Thêm bản trải phẳng 2D (Flat Texture) vào PDF
+        const flatImg = document.getElementById("flatPreview") as HTMLImageElement | null;
+        if (flatImg && flatImg.src && flatImg.naturalWidth > 0) {
+          pdf.setFontSize(12);
+          pdf.text("BAN TRAI PHANG 2D (TEXTURE DA DAU)", 30, 430);
+          pdf.addImage(flatImg.src, "PNG", 30, 440, 260, 260);
+        }
+        // Thêm ghi chú kỹ thuật nếu có
+        const notes = notesArea.value.trim();
+        if (notes) {
+          const notesY = flatImg && flatImg.src && flatImg.naturalWidth > 0 ? 720 : 430;
+          pdf.setFontSize(10);
+          pdf.text("GHI CHU KY THUAT:", 30, notesY);
+          const lines = pdf.splitTextToSize(notes, 535);
+          pdf.text(lines, 30, notesY + 14);
+        }
         pdf.save("hairtech-so-do-3d.pdf");
       },
       { signal: eventController.signal },
@@ -2513,6 +3111,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           const [x, y, z] = viewPresets[view];
           camera.position.set(x, y, z);
           controls.target.set(0, 0.3, 0);
+          controls.update();
+          requestRender();
         },
         { signal: eventController.signal },
       );
@@ -2596,6 +3196,16 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             arrowId: item.arrowId ?? item.arrowData?.id,
             hit: jsonCopy(item.hit),
             length: item.length,
+            angleDeg: item.angleDeg ?? 90,
+            dirDeg: item.dirDeg ?? 0,
+            colorHex: item.colorHex,
+          } as JsonObject;
+        case "directSectionLine":
+          return {
+            kind: "directSectionLine",
+            hitA: jsonCopy(item.hitA),
+            hitB: jsonCopy(item.hitB),
+            style: item.style || "solid",
             colorHex: item.colorHex,
           } as JsonObject;
         case "boxQuad":
@@ -2603,6 +3213,10 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             kind: "boxQuad",
             arrowAId: item.arrowAId ?? item.arrowA?.id,
             arrowBId: item.arrowBId ?? item.arrowB?.id,
+            posA_scalp: item.arrowA?.scalpPos?.toArray ? item.arrowA.scalpPos.toArray() : (item.posA_scalp || null),
+            posA_top: item.arrowA?.topPos?.toArray ? item.arrowA.topPos.toArray() : (item.posA_top || null),
+            posB_scalp: item.arrowB?.scalpPos?.toArray ? item.arrowB.scalpPos.toArray() : (item.posB_scalp || null),
+            posB_top: item.arrowB?.topPos?.toArray ? item.arrowB.topPos.toArray() : (item.posB_top || null),
             colorHex: item.colorHex,
           } as JsonObject;
         case "permRod":
@@ -2613,12 +3227,20 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             angleDeg: item.angleDeg,
           } as JsonObject;
         case "straightPermWave": {
-          const target = item.targetPos?.toArray
-            ? item.targetPos.toArray()
-            : item.scalpHit.point
-                .clone()
-                .addScaledVector(item.scalpHit.normal, item.length ?? 0.45)
-                .toArray();
+          let target: number[];
+          if (item.targetPos?.toArray) {
+            target = item.targetPos.toArray();
+          } else if (Array.isArray(item.targetPos) && item.targetPos.length === 3) {
+            target = item.targetPos;
+          } else {
+            const hp = item.scalpHit?.point;
+            const hn = item.scalpHit?.normal;
+            if (hp?.clone && hn) {
+              target = hp.clone().addScaledVector(hn, item.length ?? 0.45).toArray();
+            } else {
+              target = jsonCopy(item.targetPos ?? [0, 0, 0]);
+            }
+          }
           return {
             kind: "straightPermWave",
             hit: serializeHit(item.scalpHit),
@@ -2758,26 +3380,61 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           typeof entry.arrowId === "string"
             ? entry.arrowId
             : crypto.randomUUID();
-        const restored = create90DegreeArrow(
+        const angleDeg = typeof entry.angleDeg === "number" ? entry.angleDeg : 90;
+        const dirDeg = typeof entry.dirDeg === "number" ? entry.dirDeg : 0;
+        const restored = createElevationArrow3DHelper(
           hitFrom(entry.hit, "Điểm mũi tên"),
           typeof entry.length === "number" ? entry.length : 0.45,
+          angleDeg,
+          dirDeg,
           typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
           id,
+          scene,
         );
+        createdArrowObjects.push(restored);
         arrowMap.set(id, restored);
         return { ...jsonCopy(entry), arrowData: restored };
       }
+      if (kind === "directSectionLine") {
+        return jsonCopy(entry);
+      }
       if (kind === "boxQuad") {
-        const arrowA =
+        let arrowA =
           typeof entry.arrowAId === "string"
             ? arrowMap.get(entry.arrowAId)
             : null;
-        const arrowB =
+        let arrowB =
           typeof entry.arrowBId === "string"
             ? arrowMap.get(entry.arrowBId)
             : null;
-        if (!arrowA || !arrowB)
-          throw new Error("Mảng nối 3D tham chiếu điểm không tồn tại.");
+        if (!arrowA && Array.isArray(entry.posA_scalp) && Array.isArray(entry.posA_top)) {
+          const s = entry.posA_scalp as number[];
+          const t = entry.posA_top as number[];
+          arrowA = {
+            id: (typeof entry.arrowAId === "string" ? entry.arrowAId : null) || crypto.randomUUID(),
+            scalpPos: new THREE.Vector3(s[0] ?? 0, s[1] ?? 0, s[2] ?? 0),
+            topPos: new THREE.Vector3(t[0] ?? 0, t[1] ?? 0, t[2] ?? 0),
+            normal: new THREE.Vector3(0, 1, 0),
+            color: typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
+            group: null,
+          };
+        }
+        if (!arrowB && Array.isArray(entry.posB_scalp) && Array.isArray(entry.posB_top)) {
+          const s = entry.posB_scalp as number[];
+          const t = entry.posB_top as number[];
+          arrowB = {
+            id: (typeof entry.arrowBId === "string" ? entry.arrowBId : null) || crypto.randomUUID(),
+            scalpPos: new THREE.Vector3(s[0] ?? 0, s[1] ?? 0, s[2] ?? 0),
+            topPos: new THREE.Vector3(t[0] ?? 0, t[1] ?? 0, t[2] ?? 0),
+            normal: new THREE.Vector3(0, 1, 0),
+            color: typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
+            group: null,
+          };
+        }
+        if (!arrowA || !arrowB) {
+          console.warn("Mảng nối 3D tham chiếu điểm không tồn tại, bỏ qua.");
+          return jsonCopy(entry);
+        }
         const boxGroup = create3DBoxQuad(
           arrowA,
           arrowB,
@@ -2826,6 +3483,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             "autoRectSection",
             "arrow90",
             "boxQuad",
+            "directSectionLine",
           ].includes(String(entry.kind)),
         ),
         perm_rods: entries.filter((entry) => entry.kind === "permRod"),
@@ -2839,6 +3497,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         settings: {
           mode,
           current_2d_tool: current2DTool,
+          draw_path_mode: draw2DPathMode,
           active_3d_tool: active3DSubTool,
           active_perm_tool: activePermSubTool,
           color: colorPicker.value,
@@ -2851,8 +3510,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           node_placement: nodePlacementMode.value,
           snap_enabled: is2DSnapEnabled,
           background: bg3dSelect.value,
-          theme: themeSelector.value,
-          mesh_fill_visible: isMeshFillVisible,
+          theme: themeSelector?.value || "luxury",
+          mesh_fill_visible: runtimeMeshFillVisible,
           cage_visible: cageGridGroup.visible,
           technical_notes: notesArea.value,
         },
@@ -2881,13 +3540,16 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       const snapToggleButton = document.getElementById("snapToggleBtn")!;
       snapToggleButton.textContent = `🧲 Snap: ${is2DSnapEnabled ? "BẬT" : "TẮT"}`;
       snapToggleButton.classList.toggle("toggle-on", is2DSnapEnabled);
+      set2DPathMode((textSetting("draw_path_mode", "curved") as "curved" | "straight") || "curved");
       notesArea.value = textSetting("technical_notes", "");
-      themeSelector.value = textSetting("theme", "luxury");
-      themeSelector.dispatchEvent(new Event("change"));
+      if (themeSelector) {
+        themeSelector.value = textSetting("theme", "luxury");
+        themeSelector.dispatchEvent(new Event("change"));
+      }
       bg3dSelect.value = textSetting("background", "0xffffff");
       bg3dSelect.dispatchEvent(new Event("change"));
-      isMeshFillVisible = settings.mesh_fill_visible !== false;
-      guidedNodes?.setFillVisible(isMeshFillVisible);
+      runtimeMeshFillVisible = settings.mesh_fill_visible !== false;
+      guidedNodes?.setFillVisible(runtimeMeshFillVisible);
       cageGridGroup.visible = settings.cage_visible !== false;
       current2DTool = textSetting("current_2d_tool", "line");
       active3DSubTool = textSetting("active_3d_tool", "node3d");
@@ -2965,7 +3627,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       applyProjectSettings(project.settings);
       renderTimelineAt(project.timeline.cursor, false);
       controls.update();
-      renderer.render(scene, camera);
+      requestRender();
     }
 
     function resetProject() {
@@ -2992,13 +3654,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       waveRollPicker,
       nodePlacementMode,
       notesArea,
-    ].forEach((element) =>
-      element.addEventListener(
-        element === notesArea ? "input" : "change",
-        markDirtyRef.current,
-        { signal: eventController.signal },
-      ),
-    );
+    ]
+      .filter(Boolean)
+      .forEach((element) =>
+        element!.addEventListener(
+          element === notesArea ? "input" : "change",
+          markDirtyRef.current,
+          { signal: eventController.signal },
+        ),
+      );
     document
       .querySelectorAll(
         ".mode, .tool, .spacetool, .permtool, [data-view], #snapToggleBtn, #toggleMeshFillBtn, #cageToggleBtn",
@@ -3034,10 +3698,13 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         setTimeout(() => {
           resizeRenderer();
           controls.target.set(0, 0.3, 0);
-          renderer.render(scene, camera);
+          controls.update();
+          requestRender();
         }, 60);
       }
     }
+
+    showWorkTabRef.current = showWorkTab;
 
     document
       .getElementById("tabBtn3d")!
@@ -3056,516 +3723,63 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       });
 
     return () => {
+      showWorkTabRef.current = null;
       controls.removeEventListener("end", handleCameraEnd);
       runtimeRef.current = null;
       eventController.abort();
       stopPlayback();
-      controls.removeEventListener("change", refreshNodeView);
+      controls.removeEventListener("change", requestRender);
+      controls.removeEventListener("start", requestRender);
       guidedNodes?.dispose();
       controls.dispose();
-      cancelAnimationFrame(animId);
+      if (animId !== null) cancelAnimationFrame(animId);
+      resizeObserver.disconnect();
       window.removeEventListener("resize", resizeRenderer);
+      disposeObjectRecursively(scene);
       renderer.dispose();
     };
   }, []);
 
   return (
-    <div ref={rootRef} className="workspace-shell">
+    <div ref={rootRef} className={`workspace-shell viewmode-${viewMode}`}>
       {/* HEADER BAR */}
-      <header>
-        <div className="brand-logo">
-          <div className="brand-mark" aria-hidden="true">
-            H
-          </div>
-          <div className="brand-copy">
-            <h1>HAIRTECH 3D</h1>
-            <span>Không gian thiết kế kỹ thuật số</span>
-          </div>
-          <span className="badge-pro">PRO</span>
-        </div>
+      <WorkspaceHeader
+        activeClient={activeClient}
+        activeProject={activeProject}
+        saveStatus={saveStatus}
+        isAdmin={isAdmin}
+        viewMode={viewMode}
+        onViewModeChange={handleViewModeChange}
+        onOpenAdmin={() => setIsAdminOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onSave={() => {
+          void handleHeaderSave().catch(() => undefined);
+        }}
+        onSaveCopy={() => {
+          void saveAsCopy().catch(() => undefined);
+        }}
+      />
 
-        <div className="workspace-nav">
-          <button id="tabBtn3d" className="worktab active">
-            ✦ Thiết kế 3D
-          </button>
-          <button id="tabBtnPhoto" className="worktab">
-            ▧ Ảnh tham chiếu
-          </button>
-          <button id="tabBtnClients" className="worktab">
-            ◎ Khách hàng
+      {/* FLOATING PILL KHI Ở CHẾ ĐỘ ZEN TOÀN MÀN HÌNH */}
+      {viewMode === "zen" && (
+        <div className="zen-floating-pill">
+          <span>⛶ Chế độ toàn màn hình (F11)</span>
+          <button onClick={() => handleViewModeChange("standard")}>
+            ✕ Thoát
           </button>
         </div>
-
-        <div className="header-controls">
-          <div id="activeClientIndicatorWrap" className="client-indicator">
-            <span>Khách hàng</span>
-            <span id="activeClientIndicator">
-              {activeClient?.name || "Chưa chọn"}
-            </span>
-          </div>
-          <div
-            className={`save-indicator save-${saveStatus}`}
-            role="status"
-            aria-live="polite"
-          >
-            <span>{activeProject?.name || "Chưa mở project"}</span>
-            <small>
-              {
-                (
-                  {
-                    "no-project": "Chọn project để lưu",
-                    saved: "Đã lưu",
-                    unsaved: "Chưa lưu",
-                    saving: "Đang lưu…",
-                    error: "Lưu lỗi",
-                  } as Record<SaveStatus, string>
-                )[saveStatus]
-              }
-            </small>
-          </div>
-          <button
-            className="header-action"
-            disabled={!activeProject || saveStatus === "saving"}
-            onClick={() => {
-              void saveActiveProject().catch(() => undefined);
-            }}
-          >
-            Lưu
-          </button>
-          <button
-            className="header-action"
-            disabled={!activeProject || saveStatus === "saving"}
-            onClick={() => {
-              void saveAsCopy().catch(() => undefined);
-            }}
-          >
-            Lưu bản sao
-          </button>
-          <select
-            id="themeSelector"
-            className="theme-select"
-            style={{ width: "auto" }}
-          >
-            <option value="luxury">🌙 Midnight Studio</option>
-            <option value="neon">⚡ Neon Cyberpunk</option>
-            <option value="light">☀️ Elegant Light</option>
-          </select>
-          <button
-            onClick={() => void logoutAfterSave()}
-            className="danger logout-button"
-          >
-            ↗ Đăng xuất
-          </button>
-        </div>
-      </header>
+      )}
 
       {/* ================= TAB 1: ĐẦU 3D ================= */}
       <div id="tab3d" className="app-container">
         {/* SIDEBAR TRÁI: CÔNG CỤ */}
-        <div className="app-sidebar">
-          <div className="card-group">
-            <div className="group-label">Chế độ làm việc</div>
-            <div className="mode-grid">
-              <button id="modeDraw" className="mode active">
-                <span className="mode-icon">✎</span>
-                <span className="mode-copy">
-                  <strong>Vẽ 2D</strong>
-                  <small>Sơ đồ trên da đầu</small>
-                </span>
-              </button>
-              <button id="modeSpace" className="mode">
-                <span className="mode-icon">◇</span>
-                <span className="mode-copy">
-                  <strong>Dựng 3D</strong>
-                  <small>Điểm và mảng tóc</small>
-                </span>
-              </button>
-              <button id="modePerm" className="mode">
-                <span className="mode-icon">∿</span>
-                <span className="mode-copy">
-                  <strong>Uốn tóc</strong>
-                  <small>Trục và dạng sóng</small>
-                </span>
-              </button>
-            </div>
-          </div>
-
-          <div className="card-group" id="groupTools2D">
-            <div className="group-label">Công cụ Vẽ 2D Da Đầu</div>
-            <div className="tool-grid">
-              <button data-tool="line" className="tool active">
-                📏 Thẳng
-              </button>
-              <button data-tool="curve" className="tool">
-                〰️ Cong
-              </button>
-              <button data-tool="dashed" className="tool">
-                ┄ Nét đứt
-              </button>
-              <button data-tool="arrow" className="tool">
-                ➔ Mũi tên
-              </button>
-              <button data-tool="pen" className="tool">
-                ✏️ Bút tự do
-              </button>
-              <button data-tool="text" className="tool">
-                🔤 Chữ
-              </button>
-              <button data-tool="sticker-clipper" className="tool">
-                🪒 Tông đơ
-              </button>
-              <button data-tool="sticker-razor" className="tool">
-                🗡 Dao cạo
-              </button>
-              <button data-tool="eraser" className="tool">
-                Tẩy
-              </button>
-              <button id="finishChain2DBtn" style={{ width: "100%" }}>
-                ✔ Ngắt đoạn 2D
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="card-group"
-            id="groupTools3D"
-            style={{ display: "none" }}
-          >
-            <div className="group-label">Công cụ Dựng 3D Cắt Tóc</div>
-            <label htmlFor="nodePlacementMode">Cách đặt điểm</label>
-            <select id="nodePlacementMode" defaultValue="guided">
-              <option value="guided">Có hướng dẫn — bám chân tóc</option>
-              <option value="free">Nâng cao — điểm 3D tự do</option>
-            </select>
-            <div className="tool-grid tool-grid-wide">
-              <button id="toolNode3D" className="spacetool active">
-                📍 Điểm & mảng tóc
-              </button>
-              <button id="toolAutoRect3D" className="spacetool">
-                ⚡ Mảng Hộp Vuốt Thẳng 90°
-              </button>
-              <button id="toolArrow90" className="spacetool">
-                🏹 Mũi Tên Góc Tự Do 3D
-              </button>
-              <button id="toolConnectTips" className="spacetool">
-                🔗 Nối Đỉnh (Tạo Hộp 3D)
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="card-group"
-            id="groupToolsPerm"
-            style={{ display: "none" }}
-          >
-            <div className="group-label">Công cụ Uốn 3D & Sóng</div>
-            <div className="tool-grid">
-              <button id="toolPermRod" className="permtool active">
-                💈 Trục Uốn 3D
-              </button>
-              <button id="toolCurlC" className="permtool">
-                🌀 Sóng C
-              </button>
-              <button id="toolCurlCHook" className="permtool">
-                ↪️ Sóng C Móc
-              </button>
-              <button id="toolCurlS" className="permtool">
-                🌊 Sóng S
-              </button>
-              <button id="toolCurlJ" className="permtool">
-                ↪️ Sóng J
-              </button>
-              <button id="toolCurlSpiral" className="permtool">
-                🌀 Spiral Xoắn
-              </button>
-              <button id="toolCurlHippie" className="permtool">
-                🐑 Xoăn Hippie
-              </button>
-              <button id="toolCurlZigzag" className="permtool">
-                ⚡ Dập Xù Ziczac
-              </button>
-            </div>
-          </div>
-
-          <div className="card-group">
-            <div className="group-label">Điều khiển & Lưới</div>
-            <div className="control-grid">
-              <button id="breakChainBtn" className="primary">
-                ✂️ Ngắt chuỗi (B)
-              </button>
-              <button id="toggleMeshFillBtn" className="toggle-on">
-                🎨 Màu Mảng: BẬT
-              </button>
-              <button id="cageToggleBtn" className="toggle-on">
-                🌐 Lồng Lưới: BẬT
-              </button>
-            </div>
-          </div>
-
-          <div className="card-group">
-            <div className="group-label">Góc nhìn (W A S D T) & Nền</div>
-            <div className="view-grid">
-              <button data-view="front">Trước (W)</button>
-              <button data-view="left">Trái (A)</button>
-              <button data-view="right">Phải (D)</button>
-              <button data-view="back">Sau (S)</button>
-              <button data-view="top">Trên (T)</button>
-            </div>
-            <select
-              id="bg3dSelect"
-              className="theme-select"
-              style={{ marginTop: 4 }}
-            >
-              <option value="0xffffff">🎨 Nền Trắng</option>
-              <option value="0x0b0a09">🎨 Nền Đen</option>
-              <option value="0x1e293b">🎨 Nền Xám Đậm</option>
-            </select>
-          </div>
-        </div>
+        <WorkspaceSidebar />
 
         {/* KHUNG NHÌN VIEWPORT TRUNG TÂM */}
-        <div className="app-viewport">
-          <div className="canvas-frame">
-            <canvas id="glcanvas" />
-            <div className="mode-hint" id="modeHint">
-              ✏️ Click Chuột Trái để vẽ / dựng 3D | Chuột Phải xoay 360° (Phím W
-              A S D T: Đổi góc nhìn)
-            </div>
-          </div>
-
-          <div className="timeline-bar">
-            <div className="timeline-title">
-              <span>Tiến trình</span>
-              <small>Từng bước</small>
-            </div>
-            <button id="playBtn" className="primary">
-              ▶ Phát
-            </button>
-            <button id="prevBtn">⏮ Trước</button>
-            <button id="nextBtn">Sau ⏭</button>
-            <input
-              type="range"
-              id="timelineSlider"
-              min="0"
-              max="0"
-              defaultValue="0"
-            />
-            <span id="timelineStatus" className="timeline-status">
-              0/0
-            </span>
-          </div>
-        </div>
+        <WorkspaceViewport />
 
         {/* SIDEBAR PHẢI: THIẾT LẬP THÔNG SỐ */}
-        <div className="app-inspector">
-          <div
-            className="card-group guided-node-panel"
-            id="guidedNodeSettings"
-            style={{ display: "none" }}
-          >
-            <div className="group-label">Đặt điểm theo chân tóc</div>
-            <p id="guidedNodeStatus" role="status" aria-live="polite">
-              1. Bấm trên da đầu để chọn chân tóc.
-            </p>
-            <button id="guidedNodeFit">Xem trọn đầu & điểm</button>
-            <label htmlFor="guidedNodeAngle">
-              Góc nâng <output id="guidedNodeAngleValue">90°</output>
-            </label>
-            <div className="btnrow node-angle-presets">
-              <button type="button" data-node-angle="0">
-                0°
-              </button>
-              <button type="button" data-node-angle="45">
-                45°
-              </button>
-              <button type="button" data-node-angle="90" className="active">
-                90°
-              </button>
-            </div>
-            <input
-              id="guidedNodeAngle"
-              aria-label="Góc nâng"
-              type="range"
-              min="0"
-              max="90"
-              step="1"
-              defaultValue="90"
-            />
-            <small>0° theo tiếp tuyến da đầu · 90° vuông góc da đầu</small>
-            <label htmlFor="guidedNodeDirection">Hướng trên đầu</label>
-            <select id="guidedNodeDirection" defaultValue="0">
-              <option value="0">Hướng lên đỉnh đầu</option>
-              <option value="90">Sang bên (+90°)</option>
-              <option value="180">Hướng xuống</option>
-              <option value="270">Sang bên (−90°)</option>
-            </select>
-            <label htmlFor="guidedNodeLengthNumber">
-              Độ dài theo tỉ lệ mô hình
-            </label>
-            <div className="node-length-controls">
-              <input
-                id="guidedNodeLength"
-                aria-label="Điều chỉnh độ dài"
-                type="range"
-                min="0.05"
-                max="1.5"
-                step="0.01"
-                defaultValue="0.45"
-              />
-              <input
-                id="guidedNodeLengthNumber"
-                aria-label="Độ dài chính xác"
-                type="number"
-                min="0.05"
-                max="1.5"
-                step="0.01"
-                defaultValue="0.45"
-              />
-            </div>
-            <small>
-              Chấm vàng: chân tóc. Chấm xanh: điểm xem trước. Độ dài chưa quy
-              đổi sang cm.
-            </small>
-            <button id="guidedNodeApply" className="primary" disabled>
-              Đặt điểm
-            </button>
-            <div className="btnrow">
-              <button id="guidedNodeMoveRoot" disabled>
-                Đổi chân tóc
-              </button>
-              <button id="guidedNodeCancel" disabled>
-                Hủy chỉnh sửa
-              </button>
-            </div>
-            <button id="guidedNodeClose" disabled>
-              Khép mảng (từ 3 điểm)
-            </button>
-          </div>
-          <div className="card-group">
-            <div className="group-label">Màu / Cỡ nét / Snap</div>
-            <div className="style-controls">
-              <input type="color" id="colorPicker" defaultValue="#2563eb" />
-              <input
-                type="range"
-                id="widthPicker"
-                min="1"
-                max="14"
-                defaultValue="4"
-              />
-              <button id="snapToggleBtn" className="toggle-on">
-                🧲 Snap
-              </button>
-            </div>
-          </div>
-
-          <div className="card-group">
-            <div className="group-label">
-              <span>Chiều dài vươn 3D</span>
-              <span
-                id="extrudeLenVal"
-                style={{ color: "var(--accent-primary)" }}
-              >
-                0.45m
-              </span>
-            </div>
-            <input
-              type="range"
-              id="extrudeLenPicker"
-              min="0.2"
-              max="1.0"
-              step="0.05"
-              defaultValue="0.45"
-            />
-          </div>
-
-          <div
-            className="card-group"
-            id="groupRodSettings"
-            style={{ display: "none" }}
-          >
-            <div className="group-label">Thông Số Trục & Hướng Cong</div>
-            <select id="rodSizeSelect">
-              <option value="16">Trục #16 (Vàng)</option>
-              <option value="19" selected>
-                Trục #19 (Hồng)
-              </option>
-              <option value="22">Trục #22 (Xanh)</option>
-              <option value="25">Trục #25 (Cam)</option>
-            </select>
-            <select id="rodAngleSelect">
-              <option value="90">On-Base (90°)</option>
-              <option value="45">Half-Off Base (45°)</option>
-              <option value="20">Off-Base (20°)</option>
-            </select>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "var(--text-muted)",
-                  minWidth: 48,
-                }}
-              >
-                Biên độ:
-              </span>
-              <input
-                type="range"
-                id="waveAmpPicker"
-                min="0.04"
-                max="0.20"
-                step="0.02"
-                defaultValue="0.10"
-              />
-            </div>
-            <select id="waveRollPicker">
-              <option value="90" selected>
-                ⬅️ Sang Trái (Bám da đầu)
-              </option>
-              <option value="270">➡️ Sang Phải (Bám da đầu)</option>
-              <option value="0">⬆️ Vươn Trên (Bật ngửa ra)</option>
-              <option value="180">⬇️ Gập Dưới (Úp vào trong)</option>
-            </select>
-          </div>
-
-          <div className="card-group">
-            <div className="group-label">Thao tác & Xuất file</div>
-            <div className="history-actions">
-              <button id="undoBtn" title="Ctrl+Z" style={{ flex: 1 }}>
-                ↶ Hoàn tác
-              </button>
-              <button
-                id="redoBtn"
-                title="Ctrl+Y hoặc Ctrl+Shift+Z"
-                style={{ flex: 1 }}
-              >
-                ↷ Làm lại
-              </button>
-            </div>
-            <button id="clearBtn" className="danger" style={{ width: "100%" }}>
-              Xoá toàn bộ 2D & 3D
-            </button>
-            <div className="export-actions">
-              <button id="pngBtn" className="primary" style={{ flex: 1 }}>
-                Xuất PNG
-              </button>
-              <button id="pdfBtn" className="primary" style={{ flex: 1 }}>
-                Xuất PDF
-              </button>
-            </div>
-          </div>
-
-          <div className="card-group">
-            <div className="group-label">Ghi chú kỹ thuật</div>
-            <textarea
-              id="notesArea"
-              placeholder="Ghi chú kỹ thuật uốn / cắt..."
-            />
-          </div>
-
-          <div className="card-group flat-preview">
-            <div className="group-label">Bản trải phẳng (Texture)</div>
-            <img id="flatPreview" alt="bản trải phẳng" />
-          </div>
-        </div>
+        <WorkspaceInspector />
       </div>
 
       {/* ================= TAB 2: ẢNH KHÁCH HÀNG ================= */}
@@ -3587,8 +3801,83 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           onCreateProject={createClientProject}
           onOpenProject={openClientProject}
           onDeleteProject={deleteClientProject}
+          onViewPhotos={() => {
+            if (showWorkTabRef.current) {
+              showWorkTabRef.current("photo");
+            } else {
+              document.getElementById("tabBtnPhoto")?.click();
+            }
+          }}
         />
       </div>
+
+      {/* ================= MODAL: QUẢN TRỊ SALON & BẢN QUYỀN ================= */}
+      <AdminPanel
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
+      />
+
+      {/* ================= MODAL: CÀI ĐẶT BÁNH RĂNG (SETTINGS) ================= */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        currentTheme={currentTheme}
+        onThemeChange={(theme) => {
+          setCurrentTheme(theme);
+          if (theme === "luxury") {
+            document.documentElement.removeAttribute("data-theme");
+          } else {
+            document.documentElement.setAttribute("data-theme", theme);
+          }
+          const sel = document.getElementById("themeSelector") as HTMLSelectElement | null;
+          if (sel) {
+            sel.value = theme;
+            sel.dispatchEvent(new Event("change"));
+          }
+        }}
+        bg3dColor={bg3dColor}
+        onBg3dColorChange={(color) => {
+          setBg3dColor(color);
+          const sel = document.getElementById("bg3dSelect") as HTMLSelectElement | null;
+          if (sel) {
+            sel.value = color;
+            sel.dispatchEvent(new Event("change"));
+          }
+        }}
+        isMeshFillVisible={isMeshFillVisible}
+        onToggleMeshFill={() => {
+          const btn = document.getElementById("toggleMeshFillBtn") as HTMLButtonElement | null;
+          btn?.click();
+          setIsMeshFillVisible((v) => !v);
+        }}
+        isCageVisible={isCageVisible}
+        onToggleCage={() => {
+          const btn = document.getElementById("cageToggleBtn") as HTMLButtonElement | null;
+          btn?.click();
+          setIsCageVisible((v) => !v);
+        }}
+        isSnapEnabled={isSnapEnabled}
+        onToggleSnap={() => {
+          const btn = document.getElementById("snapToggleBtn") as HTMLButtonElement | null;
+          btn?.click();
+          setIsSnapEnabled((v) => !v);
+        }}
+        isAdmin={isAdmin}
+        onOpenAdmin={() => setIsAdminOpen(true)}
+        onLogout={() => void logoutAfterSave()}
+      />
+
+      {/* ================= MODAL: LƯU BẢN THIẾT KẾ MỚI (KHI CHƯA CÓ PROJECT) ================= */}
+      <SaveNewProjectModal
+        isOpen={isSaveNewProjectModalOpen}
+        onClose={() => setIsSaveNewProjectModalOpen(false)}
+        activeClient={activeClient}
+        defaultNotes={
+          (document.getElementById("notesArea") as HTMLTextAreaElement | null)
+            ?.value || ""
+        }
+        onSave={handleSaveNewProject}
+      />
     </div>
   );
 };

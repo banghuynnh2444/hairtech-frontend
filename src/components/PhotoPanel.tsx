@@ -63,24 +63,48 @@ function PhotoCard({
   busy,
   onDelete,
   onReplace,
+  onPreview,
 }: {
   photo: ClientPhoto;
   title: string;
   busy: boolean;
   onDelete: (photo: ClientPhoto) => void;
   onReplace?: (kind: ClientPhotoKind, file: File) => void;
+  onPreview?: (photo: ClientPhoto) => void;
 }) {
   return (
     <article className="customer-photo-card">
-      <div className="customer-photo-frame">
+      <div
+        className="customer-photo-frame photo-clickable"
+        role="button"
+        tabIndex={0}
+        title="Bấm để xem ảnh phóng to"
+        onClick={() => onPreview?.(photo)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onPreview?.(photo);
+          }
+        }}
+      >
         <img src={photo.url} alt={`${title} của khách hàng`} loading="lazy" />
         <span>{title}</span>
+        <div className="photo-zoom-badge">🔍 Phóng to</div>
       </div>
       <div className="customer-photo-meta">
         <strong title={photo.original_name}>{photo.original_name}</strong>
         <small>{formatSize(photo.size_bytes)}</small>
       </div>
       <div className="customer-photo-actions">
+        <button
+          type="button"
+          className="photo-action-btn view-btn"
+          disabled={busy}
+          onClick={() => onPreview?.(photo)}
+          title="Xem ảnh chi tiết"
+        >
+          Xem
+        </button>
         {onReplace && (
           <UploadButton
             kind={photo.kind}
@@ -109,6 +133,16 @@ export function PhotoPanel({ client }: PhotoPanelProps) {
   const [uploadingKind, setUploadingKind] = useState<ClientPhotoKind | null>(null);
   const [progress, setProgress] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [previewPhoto, setPreviewPhoto] = useState<ClientPhoto | null>(null);
+
+  useEffect(() => {
+    if (!previewPhoto) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreviewPhoto(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewPhoto]);
 
   useEffect(() => {
     let cancelled = false;
@@ -230,6 +264,7 @@ export function PhotoPanel({ client }: PhotoPanelProps) {
                   busy={busy}
                   onDelete={(item) => void remove(item)}
                   onReplace={(nextKind, file) => void upload(nextKind, file)}
+                  onPreview={(item) => setPreviewPhoto(item)}
                 />
               ) : (
                 <div className="photo-slot-empty" key={kind}>
@@ -271,6 +306,7 @@ export function PhotoPanel({ client }: PhotoPanelProps) {
                     title="Tham khảo"
                     busy={busy}
                     onDelete={(item) => void remove(item)}
+                    onPreview={(item) => setPreviewPhoto(item)}
                   />
                 ))}
               </div>
@@ -280,6 +316,83 @@ export function PhotoPanel({ client }: PhotoPanelProps) {
       )}
 
       {error && <p className="panel-error" role="alert">{error}</p>}
+
+      {previewPhoto && (
+        <PhotoLightboxModal
+          photo={previewPhoto}
+          onClose={() => setPreviewPhoto(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function PhotoLightboxModal({
+  photo,
+  onClose,
+}: {
+  photo: ClientPhoto;
+  onClose: () => void;
+}) {
+  const kindLabel =
+    photo.kind === "before"
+      ? "Ảnh trước"
+      : photo.kind === "after"
+        ? "Ảnh sau"
+        : "Ảnh tham khảo";
+
+  return (
+    <div
+      className="photo-lightbox-backdrop"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Xem ${kindLabel}`}
+    >
+      <div
+        className="photo-lightbox-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="photo-lightbox-header">
+          <div className="photo-lightbox-info">
+            <span className="photo-lightbox-badge">{kindLabel}</span>
+            <h3 title={photo.original_name}>{photo.original_name}</h3>
+            <small>
+              {formatSize(photo.size_bytes)}
+              {photo.created_at &&
+                ` · ${new Date(photo.created_at).toLocaleDateString("vi-VN")}`}
+            </small>
+          </div>
+          <div className="photo-lightbox-actions">
+            <a
+              href={photo.url}
+              target="_blank"
+              rel="noreferrer"
+              download={photo.original_name}
+              className="photo-lightbox-btn"
+              title="Tải ảnh về máy"
+            >
+              ⬇ Tải về
+            </a>
+            <button
+              type="button"
+              className="photo-lightbox-close"
+              onClick={onClose}
+              title="Đóng (Esc)"
+            >
+              ✕
+            </button>
+          </div>
+        </header>
+
+        <div className="photo-lightbox-body">
+          <img
+            src={photo.url}
+            alt={`${kindLabel} - ${photo.original_name}`}
+            className="photo-lightbox-img"
+          />
+        </div>
+      </div>
     </div>
   );
 }
