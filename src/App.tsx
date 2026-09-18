@@ -8,6 +8,9 @@ import {
   clearHairTechSession,
   hasStoredSession,
 } from "./services/session";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { checkForAppUpdate } from "./services/updater";
+import { UpdateModal } from "./components/UpdateModal";
 
 const Workspace = lazy(() =>
   import("./components/Workspace").then((module) => ({
@@ -22,6 +25,16 @@ export function App() {
   const [retry, setRetry] = useState(0);
   const [message, setMessage] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const update = await checkForAppUpdate();
+      if (update) {
+        setAvailableUpdate(update);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,17 +133,25 @@ export function App() {
   if (screen === "login")
     return <Login onLoginSuccess={() => setScreen("workspace")} />;
   return (
-    <Suspense
-      fallback={
-        <div className="login-container">
-          <div className="login-card">
-            <p role="status">Đang mở không gian thiết kế…</p>
+    <>
+      <Suspense
+        fallback={
+          <div className="login-container">
+            <div className="login-card">
+              <p role="status">Đang mở không gian thiết kế…</p>
+            </div>
           </div>
-        </div>
-      }
-    >
-      <Workspace onLogout={handleLogout} />
-    </Suspense>
+        }
+      >
+        <Workspace onLogout={handleLogout} />
+      </Suspense>
+      {availableUpdate && (
+        <UpdateModal
+          update={availableUpdate}
+          onClose={() => setAvailableUpdate(null)}
+        />
+      )}
+    </>
   );
 }
 export default App;

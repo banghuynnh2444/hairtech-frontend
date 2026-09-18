@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -33,5 +34,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM5RTE4OTEwRTEwMDkwQ0EKUldUS2tBRGhFSW5oeVpKblRMemZOVjBoL3hnc2Q5dFZrMjlwS09IY0F1OGliOEtSeW12RzlJUHgK",
+      "endpoints": [
+        "https://github.com/banghuynnh2444/hairtech-frontend/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

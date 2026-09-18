@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from "react";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { checkForAppUpdate } from "../services/updater";
+import { UpdateModal } from "./UpdateModal";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -38,6 +41,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   userEmail = "bang19112005@gmail.com",
 }) => {
   const [activeTab, setActiveTab] = useState<"general" | "viewport" | "account">("general");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateResult, setUpdateResult] = useState<string | null>(null);
+  const [manualUpdate, setManualUpdate] = useState<Update | null>(null);
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateResult(null);
+    try {
+      const update = await checkForAppUpdate();
+      if (update) {
+        setManualUpdate(update);
+      } else {
+        setUpdateResult("Bạn đang sử dụng phiên bản mới nhất (v0.3.0) ✨");
+      }
+    } catch {
+      setUpdateResult("Không thể kiểm tra cập nhật lúc này. Vui lòng thử lại sau.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -249,6 +272,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               )}
 
+              <div className="admin-shortcut-box" style={{ borderColor: "rgba(14, 165, 233, 0.3)" }}>
+                <div>
+                  <strong>Cập nhật phần mềm (v0.3.0)</strong>
+                  <p>{updateResult || "Kiểm tra và tải về phiên bản HairTech mới nhất tự động."}</p>
+                </div>
+                <button
+                  className="btn-open-admin-panel"
+                  style={{ background: "linear-gradient(135deg, #0284c7, #06b6d4)", minWidth: "140px" }}
+                  disabled={checkingUpdate}
+                  onClick={handleCheckUpdate}
+                >
+                  {checkingUpdate ? "⏳ Đang kiểm tra..." : "🔄 Kiểm tra ngay"}
+                </button>
+              </div>
+
               <div className="settings-divider"></div>
 
               <div className="settings-danger-zone">
@@ -272,12 +310,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* FOOTER */}
         <div className="settings-modal-footer">
-          <span className="settings-version-note">HairTech 3D • Phiên bản Pro v0.2.0</span>
+          <span className="settings-version-note">HairTech 3D • Phiên bản Pro v0.3.0</span>
           <button className="settings-btn-done" onClick={onClose}>
             Xong & Đóng
           </button>
         </div>
       </div>
+
+      {manualUpdate && (
+        <UpdateModal
+          update={manualUpdate}
+          onClose={() => setManualUpdate(null)}
+        />
+      )}
     </div>
   );
 };
