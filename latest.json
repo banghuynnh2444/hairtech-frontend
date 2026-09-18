@@ -1,0 +1,11 @@
+{
+  "version": "0.3.1",
+  "notes": "HairTech 3D v0.3.1 - Khắc phục triệt để lỗi mất nét vẽ 2D/3D khi lưu/tải dự án, thiết lập CSP bảo mật cấp doanh nghiệp, dọn dẹp phân quyền AdminGuard, tăng timeout API chống Cold Start.",
+  "pub_date": "2026-09-18T19:50:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUS2tBRGhFSW5oeVlwdEFUaHBHK21yZUZCbVZ6T2VOa0Nyb05WY056MHZNdStDc1NyL0hSRDU0TXdlbWRHamJmT2V2QTQ4cC9jZWRoTkJJaTIraG9ic3hOaHY0OE9QM2dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NzYwOTQ3CWZpbGU6SGFpclRlY2ggM0RfMC4zLjFfeDY0LXNldHVwLmV4ZQp1SnU5QXhUK0p3QTY1RGJZN3hzYWN5ODMyc1ptUnRrWlNud09kUkpQUXFBWWtnVXBWSG9ac1pQM1BGUWttczlQV0oralpxLzhnWUEwelpzdmZNY01DZz09Cg==",
+      "url": "https://github.com/banghuynnh2444/hairtech-frontend/releases/download/v0.3.1/HairTech.3D_0.3.1_x64-setup.exe"
+    }
+  }
+}
