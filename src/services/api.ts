@@ -7,7 +7,7 @@ if (!apiUrl) throw new Error('Thiếu VITE_API_URL khi build bản phát hành.'
 
 const api = axios.create({
   baseURL: apiUrl,
-  timeout: 10000,
+  timeout: 30000,
 });
 
 let refreshPromise: Promise<string> | null = null;

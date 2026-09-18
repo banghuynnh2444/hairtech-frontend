@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://hairtech-backend.onrender.com http://localhost:3000 ws://localhost:1420 ws://localhost:1421 https://*.supabase.co https://github.com; font-src 'self' data:; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {

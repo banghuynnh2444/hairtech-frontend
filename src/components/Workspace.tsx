@@ -174,6 +174,18 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
             typeof projectData.settings.technical_notes === "string"
               ? projectData.settings.technical_notes
               : project.notes;
+          try {
+            localStorage.setItem(
+              `hairtech_draft_${project.id}`,
+              JSON.stringify({
+                id: project.id,
+                project_data: projectData,
+                savedAt: new Date().toISOString(),
+              }),
+            );
+          } catch {
+            // bỏ qua nếu quota storage đầy
+          }
           const saved = await updateDiagram(project.id, {
             project_data: projectData,
             notes,
@@ -3119,32 +3131,86 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     });
 
     // --- 12. SERIALIZE / RESTORE PROJECT V1 ---
-    function vectorFrom(value: unknown, label: string) {
+    function vectorFrom(value: unknown, label: string): THREE.Vector3 {
+      if (value instanceof THREE.Vector3) return value.clone();
       if (
-        !Array.isArray(value) ||
-        value.length !== 3 ||
-        !value.every(
+        Array.isArray(value) &&
+        value.length === 3 &&
+        value.every(
           (part) => typeof part === "number" && Number.isFinite(part),
         )
       ) {
-        throw new Error(`${label} không hợp lệ.`);
+        return new THREE.Vector3(value[0], value[1], value[2]);
       }
-      return new THREE.Vector3(value[0], value[1], value[2]);
+      if (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        "x" in value &&
+        "y" in value &&
+        "z" in value &&
+        typeof (value as any).x === "number" &&
+        typeof (value as any).y === "number" &&
+        typeof (value as any).z === "number" &&
+        Number.isFinite((value as any).x) &&
+        Number.isFinite((value as any).y) &&
+        Number.isFinite((value as any).z)
+      ) {
+        return new THREE.Vector3(
+          (value as any).x,
+          (value as any).y,
+          (value as any).z,
+        );
+      }
+      console.warn(`[Workspace] ${label} không hợp lệ, dùng fallback (0,0,0):`, value);
+      return new THREE.Vector3(0, 0, 0);
     }
 
-    function hitFrom(value: unknown, label: string) {
+    function hitFrom(
+      value: unknown,
+      label: string,
+    ): { point: THREE.Vector3; normal: THREE.Vector3 } {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error(`${label} không hợp lệ.`);
+        console.warn(`[Workspace] ${label} không hợp lệ, dùng fallback hit:`, value);
+        return {
+          point: new THREE.Vector3(0, 0.5, 0),
+          normal: new THREE.Vector3(0, 1, 0),
+        };
       }
       const hit = value as Record<string, unknown>;
-      return {
-        point: vectorFrom(hit.point, `${label} point`),
-        normal: vectorFrom(hit.normal, `${label} normal`).normalize(),
-      };
+      const p = hit.point ?? (hit as any).p ?? (hit as any).position ?? (hit as any).pos;
+      const n = hit.normal ?? (hit as any).n ?? (hit as any).norm;
+      const point = vectorFrom(p, `${label} point`);
+      let normal = vectorFrom(n, `${label} normal`);
+      if (normal.lengthSq() < 1e-6) normal.set(0, 1, 0);
+      else normal.normalize();
+      return { point, normal };
     }
 
-    function serializeHit(hit: any) {
-      return { point: hit.point.toArray(), normal: hit.normal.toArray() };
+    function serializeHit(hit: any): {
+      point: [number, number, number];
+      normal: [number, number, number];
+    } | null {
+      if (!hit) return null;
+      const toArr = (v: any): [number, number, number] => {
+        if (!v) return [0, 0, 0];
+        if (typeof v.toArray === "function") return v.toArray();
+        if (Array.isArray(v) && v.length === 3) {
+          return [Number(v[0]) || 0, Number(v[1]) || 0, Number(v[2]) || 0];
+        }
+        if (
+          typeof v === "object" &&
+          typeof v.x === "number" &&
+          typeof v.y === "number" &&
+          typeof v.z === "number"
+        ) {
+          return [v.x, v.y, v.z];
+        }
+        return [0, 0, 0];
+      };
+      const p = hit.point ?? hit.p ?? hit.position ?? hit.pos;
+      const n = hit.normal ?? hit.n ?? hit.norm;
+      return { point: toArr(p), normal: toArr(n) };
     }
 
     function jsonCopy<T>(value: T): T {
@@ -3152,41 +3218,73 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
     }
 
     function serializeHistoryEntry(item: any): JsonObject {
-      switch (item.kind) {
+      const kind = String(item.kind || "");
+      switch (kind) {
         case "texture":
           return {
             kind: "texture",
             action: jsonCopy(item.action),
           } as JsonObject;
-        case "guided_nodes":
+        case "guided_nodes": {
+          const op = jsonCopy(item.operation);
+          if (op?.node) {
+            const n = op.node;
+            if (n.root && typeof n.root.toArray === "function")
+              n.root = n.root.toArray();
+            else if (n.root && typeof n.root === "object" && !Array.isArray(n.root))
+              n.root = [n.root.x, n.root.y, n.root.z];
+            if (n.normal && typeof n.normal.toArray === "function")
+              n.normal = n.normal.toArray();
+            else if (n.normal && typeof n.normal === "object" && !Array.isArray(n.normal))
+              n.normal = [n.normal.x, n.normal.y, n.normal.z];
+          }
           return {
             kind: "guided_nodes",
-            operation: jsonCopy(item.operation),
+            operation: op,
           } as JsonObject;
-        case "spacepoint":
+        }
+        case "spacepoint": {
+          const toArr = (v: any): [number, number, number] => {
+            if (!v) return [0, 0, 0];
+            if (typeof v.toArray === "function") return v.toArray();
+            if (Array.isArray(v) && v.length === 3) return [v[0], v[1], v[2]];
+            if (typeof v === "object" && typeof v.x === "number") return [v.x, v.y, v.z];
+            return [0, 0, 0];
+          };
           return {
             kind: "spacepoint",
             nodeId: item.nodeId,
             previousNodeId: item.previousNodeId ?? null,
-            pos: jsonCopy(item.pos),
+            pos: toArr(item.pos),
             angleDeg: item.angleDeg ?? null,
             colorHex: item.colorHex,
           } as JsonObject;
-        case "space_closed_section":
+        }
+        case "space_closed_section": {
+          const rawPoints = item.points ?? item.pointsList;
+          const pts = Array.isArray(rawPoints)
+            ? rawPoints.map((pt: any) => {
+                if (typeof pt?.toArray === "function") return pt.toArray();
+                if (Array.isArray(pt) && pt.length === 3)
+                  return [pt[0], pt[1], pt[2]];
+                if (pt && typeof pt.x === "number") return [pt.x, pt.y, pt.z];
+                return [0, 0, 0];
+              })
+            : [];
           return {
             kind: "space_closed_section",
-            points: jsonCopy(
-              item.points ??
-                item.pointsList?.map((point: THREE.Vector3) => point.toArray()),
-            ),
+            points: pts,
             colorHex: item.colorHex,
           } as JsonObject;
+        }
         case "autoRectSection":
           return {
             kind: "autoRectSection",
-            hitA: jsonCopy(item.hitA),
-            hitB: jsonCopy(item.hitB),
-            arrowIds: jsonCopy(item.arrowIds),
+            hitA: serializeHit(item.hitA || item.tipA?.scalpHit),
+            hitB: serializeHit(item.hitB || item.tipB?.scalpHit),
+            arrowIds: jsonCopy(
+              item.arrowIds || [item.tipA?.id, item.tipB?.id].filter(Boolean),
+            ),
             length: item.length,
             colorHex: item.colorHex,
           } as JsonObject;
@@ -3194,8 +3292,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           return {
             kind: "arrow90",
             arrowId: item.arrowId ?? item.arrowData?.id,
-            hit: jsonCopy(item.hit),
-            length: item.length,
+            hit: serializeHit(item.hit || item.arrowData?.scalpHit),
+            length: item.length ?? item.arrowData?.length ?? 0.45,
             angleDeg: item.angleDeg ?? 90,
             dirDeg: item.dirDeg ?? 0,
             colorHex: item.colorHex,
@@ -3203,47 +3301,72 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         case "directSectionLine":
           return {
             kind: "directSectionLine",
-            hitA: jsonCopy(item.hitA),
-            hitB: jsonCopy(item.hitB),
+            hitA: serializeHit(item.hitA),
+            hitB: serializeHit(item.hitB),
             style: item.style || "solid",
             colorHex: item.colorHex,
           } as JsonObject;
-        case "boxQuad":
+        case "boxQuad": {
+          const toArr = (v: any): [number, number, number] | null => {
+            if (!v) return null;
+            if (typeof v.toArray === "function") return v.toArray();
+            if (Array.isArray(v) && v.length === 3) return [v[0], v[1], v[2]];
+            if (typeof v === "object" && typeof v.x === "number")
+              return [v.x, v.y, v.z];
+            return null;
+          };
           return {
             kind: "boxQuad",
             arrowAId: item.arrowAId ?? item.arrowA?.id,
             arrowBId: item.arrowBId ?? item.arrowB?.id,
-            posA_scalp: item.arrowA?.scalpPos?.toArray ? item.arrowA.scalpPos.toArray() : (item.posA_scalp || null),
-            posA_top: item.arrowA?.topPos?.toArray ? item.arrowA.topPos.toArray() : (item.posA_top || null),
-            posB_scalp: item.arrowB?.scalpPos?.toArray ? item.arrowB.scalpPos.toArray() : (item.posB_scalp || null),
-            posB_top: item.arrowB?.topPos?.toArray ? item.arrowB.topPos.toArray() : (item.posB_top || null),
+            posA_scalp:
+              toArr(item.arrowA?.scalpPos) || toArr(item.posA_scalp) || null,
+            posA_top:
+              toArr(item.arrowA?.topPos) || toArr(item.posA_top) || null,
+            posB_scalp:
+              toArr(item.arrowB?.scalpPos) || toArr(item.posB_scalp) || null,
+            posB_top:
+              toArr(item.arrowB?.topPos) || toArr(item.posB_top) || null,
             colorHex: item.colorHex,
           } as JsonObject;
+        }
         case "permRod":
           return {
             kind: "permRod",
-            hit: jsonCopy(item.hit),
+            hit: serializeHit(item.hit || item.scalpHit),
             sizeMM: item.sizeMM,
             angleDeg: item.angleDeg,
           } as JsonObject;
         case "straightPermWave": {
-          let target: number[];
-          if (item.targetPos?.toArray) {
+          let target: [number, number, number];
+          if (typeof item.targetPos?.toArray === "function") {
             target = item.targetPos.toArray();
-          } else if (Array.isArray(item.targetPos) && item.targetPos.length === 3) {
-            target = item.targetPos;
+          } else if (
+            Array.isArray(item.targetPos) &&
+            item.targetPos.length === 3
+          ) {
+            target = [
+              item.targetPos[0],
+              item.targetPos[1],
+              item.targetPos[2],
+            ];
+          } else if (item.targetPos && typeof item.targetPos.x === "number") {
+            target = [item.targetPos.x, item.targetPos.y, item.targetPos.z];
           } else {
-            const hp = item.scalpHit?.point;
-            const hn = item.scalpHit?.normal;
+            const hp = item.scalpHit?.point || item.hit?.point;
+            const hn = item.scalpHit?.normal || item.hit?.normal;
             if (hp?.clone && hn) {
-              target = hp.clone().addScaledVector(hn, item.length ?? 0.45).toArray();
+              target = hp
+                .clone()
+                .addScaledVector(hn, item.length ?? 0.45)
+                .toArray();
             } else {
-              target = jsonCopy(item.targetPos ?? [0, 0, 0]);
+              target = [0, 0, 0];
             }
           }
           return {
             kind: "straightPermWave",
-            hit: serializeHit(item.scalpHit),
+            hit: serializeHit(item.scalpHit || item.hit),
             waveType: item.waveType,
             length: item.length,
             amp: item.amp,
@@ -3255,9 +3378,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         case "clear_all":
           return { kind: "clear_all" };
         default:
-          throw new Error(
-            `Project chứa thao tác không hỗ trợ: ${String(item.kind)}`,
-          );
+          return jsonCopy(item);
       }
     }
 
@@ -3407,27 +3528,33 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           typeof entry.arrowBId === "string"
             ? arrowMap.get(entry.arrowBId)
             : null;
-        if (!arrowA && Array.isArray(entry.posA_scalp) && Array.isArray(entry.posA_top)) {
-          const s = entry.posA_scalp as number[];
-          const t = entry.posA_top as number[];
+        if (!arrowA && (entry.posA_scalp || entry.posA_top)) {
+          const s = vectorFrom(entry.posA_scalp, "Chân mảng A");
+          const t = vectorFrom(entry.posA_top, "Đỉnh mảng A");
           arrowA = {
-            id: (typeof entry.arrowAId === "string" ? entry.arrowAId : null) || crypto.randomUUID(),
-            scalpPos: new THREE.Vector3(s[0] ?? 0, s[1] ?? 0, s[2] ?? 0),
-            topPos: new THREE.Vector3(t[0] ?? 0, t[1] ?? 0, t[2] ?? 0),
+            id:
+              (typeof entry.arrowAId === "string" ? entry.arrowAId : null) ||
+              crypto.randomUUID(),
+            scalpPos: s,
+            topPos: t,
             normal: new THREE.Vector3(0, 1, 0),
-            color: typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
+            color:
+              typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
             group: null,
           };
         }
-        if (!arrowB && Array.isArray(entry.posB_scalp) && Array.isArray(entry.posB_top)) {
-          const s = entry.posB_scalp as number[];
-          const t = entry.posB_top as number[];
+        if (!arrowB && (entry.posB_scalp || entry.posB_top)) {
+          const s = vectorFrom(entry.posB_scalp, "Chân mảng B");
+          const t = vectorFrom(entry.posB_top, "Đỉnh mảng B");
           arrowB = {
-            id: (typeof entry.arrowBId === "string" ? entry.arrowBId : null) || crypto.randomUUID(),
-            scalpPos: new THREE.Vector3(s[0] ?? 0, s[1] ?? 0, s[2] ?? 0),
-            topPos: new THREE.Vector3(t[0] ?? 0, t[1] ?? 0, t[2] ?? 0),
+            id:
+              (typeof entry.arrowBId === "string" ? entry.arrowBId : null) ||
+              crypto.randomUUID(),
+            scalpPos: s,
+            topPos: t,
             normal: new THREE.Vector3(0, 1, 0),
-            color: typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
+            color:
+              typeof entry.colorHex === "string" ? entry.colorHex : "#2563eb",
             group: null,
           };
         }
@@ -3465,7 +3592,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         );
         return { ...jsonCopy(entry), group, scalpHit: hit, targetPos };
       }
-      throw new Error(`Project chứa thao tác không hỗ trợ: ${String(kind)}`);
+      console.warn(`[Workspace] Bỏ qua thao tác không hỗ trợ: ${String(kind)}`);
+      return jsonCopy(entry);
     }
 
     function serializeProject(): ProjectDataV1 {
@@ -3612,21 +3740,53 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
       clearRuntimeHistory();
       const nodeMap = new Map<string, any>();
       const arrowMap = new Map<string, any>();
-      try {
-        for (const entry of project.timeline.entries) {
-          historyStack.push(restoreHistoryEntry(entry, nodeMap, arrowMap));
+
+      // Phục hồi từ timeline.entries hoặc ghép từ các bộ sưu tập con nếu timeline bị trống
+      let rawEntries: JsonObject[] =
+        Array.isArray(project.timeline?.entries) && project.timeline.entries.length > 0
+          ? project.timeline.entries
+          : [
+              ...(project.drawing_2d || []),
+              ...(project.nodes_3d || []),
+              ...(project.sections || []),
+              ...(project.perm_rods || []),
+              ...(project.waves || []),
+            ];
+
+      for (const entry of rawEntries) {
+        try {
+          const restored = restoreHistoryEntry(entry, nodeMap, arrowMap);
+          if (restored) historyStack.push(restored);
+        } catch (itemErr) {
+          console.error(
+            "[Workspace] Lỗi khôi phục phần tử trong project, bỏ qua phần tử này:",
+            itemErr,
+            entry,
+          );
         }
-      } catch (error) {
-        clearRuntimeHistory();
-        throw error;
       }
-      camera.position.copy(vectorFrom(project.camera.position, "Camera"));
-      controls.target.copy(vectorFrom(project.camera.target, "Tâm camera"));
-      camera.zoom = project.camera.zoom;
+
+      camera.position.copy(vectorFrom(project.camera?.position, "Camera"));
+      controls.target.copy(vectorFrom(project.camera?.target, "Tâm camera"));
+      if (
+        typeof project.camera?.zoom === "number" &&
+        Number.isFinite(project.camera.zoom) &&
+        project.camera.zoom > 0
+      ) {
+        camera.zoom = project.camera.zoom;
+      }
       camera.updateProjectionMatrix();
-      applyProjectSettings(project.settings);
-      renderTimelineAt(project.timeline.cursor, false);
+      applyProjectSettings(project.settings || {});
+
+      // Nếu cursor <= 0 nhưng historyStack có dữ liệu -> hiển thị ở bước cuối cùng
+      const targetStep =
+        typeof project.timeline?.cursor === "number" && project.timeline.cursor > 0
+          ? project.timeline.cursor
+          : historyStack.length;
+
+      renderTimelineAt(targetStep, false);
       controls.update();
+      redrawTexture();
       requestRender();
     }
 
