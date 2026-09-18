@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { Update } from "@tauri-apps/plugin-updater";
+import { getVersion } from "@tauri-apps/api/app";
 import { checkForAppUpdate } from "../services/updater";
 import { UpdateModal } from "./UpdateModal";
 
@@ -44,6 +45,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<string | null>(null);
   const [manualUpdate, setManualUpdate] = useState<Update | null>(null);
+  const [appVersion, setAppVersion] = useState<string>(
+    typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.3.1"
+  );
+
+  useEffect(() => {
+    getVersion()
+      .then((ver) => {
+        if (ver) setAppVersion(ver);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true);
@@ -53,7 +65,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (update) {
         setManualUpdate(update);
       } else {
-        setUpdateResult("Bạn đang sử dụng phiên bản mới nhất (v0.3.0) ✨");
+        setUpdateResult(`Bạn đang sử dụng phiên bản mới nhất (v${appVersion}) ✨`);
       }
     } catch {
       setUpdateResult("Không thể kiểm tra cập nhật lúc này. Vui lòng thử lại sau.");
@@ -274,7 +286,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="admin-shortcut-box" style={{ borderColor: "rgba(14, 165, 233, 0.3)" }}>
                 <div>
-                  <strong>Cập nhật phần mềm (v0.3.0)</strong>
+                  <strong>Cập nhật phần mềm (v{appVersion})</strong>
                   <p>{updateResult || "Kiểm tra và tải về phiên bản HairTech mới nhất tự động."}</p>
                 </div>
                 <button
@@ -310,7 +322,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* FOOTER */}
         <div className="settings-modal-footer">
-          <span className="settings-version-note">HairTech 3D • Phiên bản Pro v0.3.0</span>
+          <span className="settings-version-note">HairTech 3D • Phiên bản Pro v{appVersion}</span>
           <button className="settings-btn-done" onClick={onClose}>
             Xong & Đóng
           </button>
