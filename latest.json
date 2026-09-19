@@ -1,10 +1,10 @@
 {
   "version": "0.3.1",
-  "notes": "HairTech 3D v0.3.1 - Hiển thị phiên bản động chính xác, khắc phục triệt để mất nét vẽ 2D/3D khi lưu/tải dự án, thiết lập CSP bảo mật cấp doanh nghiệp, dọn dẹp phân quyền AdminGuard, tăng timeout API chống Cold Start.",
-  "pub_date": "2026-09-18T20:05:00Z",
+  "notes": "HairTech 3D v0.3.1 - Tối ưu truy vấn quản trị viên, chống lỗi phân trang và tìm kiếm, bảo vệ phím tắt camera chống giật góc nhìn, tối ưu xuất PDF nhiều trang, hiển thị phiên bản động chuẩn xác.",
+  "pub_date": "2026-09-19T08:55:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUS2tBRGhFSW5oeWV3WXVHVVJwSGRZOHNGRWtwNytCRS82UXhGeTZDbzhOQmNjc0RxWlB1T3YzSm11N0tXZWpaczFzQktxY2NJWUMxWW9aSGFXSldWVjNtZVl4QkJrRUFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NzYxOTI5CWZpbGU6SGFpclRlY2ggM0RfMC4zLjFfeDY0LXNldHVwLmV4ZQpLNXVFL1gvT2Q4RDFsc2JVNW96eVE4WmJZaUlXZ245MGFvSXIrZ2orcy9UUXRFUDVyaXY4dDB5Z0lpS0g1VlQ3eXZ2d2lxem1aK2t5QkJleE5yZ29Bdz09Cg==",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUS2tBRGhFSW5oeWFIdFVETUtuY09zcVk0cHZwNU5SWXFuak9NcjNvelAya2dEQk9QdU45V0c1RWZDRzZMLzF1eDZUUU5yMEliRWJZajczbklxYXFhb1BaeHFpMTNHT0FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5ODA4MDY5CWZpbGU6SGFpclRlY2ggM0RfMC4zLjFfeDY0LXNldHVwLmV4ZQoxeWloajBxQ0FRMzdISzJpNWVCVFVNR1hqbys2eE9MZjJQcDNSY0gvcmRwMmg2ZTNGdkY3eXN3OG5Id0d0S1kyeWVKNy8zOCtzd3RkQzVuaS9BV0FDdz09Cg==",
       "url": "https://github.com/banghuynnh2444/hairtech-frontend/releases/download/v0.3.1/HairTech.3D_0.3.1_x64-setup.exe"
     }
   }
