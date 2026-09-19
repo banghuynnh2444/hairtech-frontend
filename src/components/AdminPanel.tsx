@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   getAdminStats,
   listAdminUsers,
@@ -103,10 +103,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ isOpen, onClose }) => {
     await Promise.all([loadStats(), loadUsers()]);
   }, [loadStats, loadUsers]);
 
+  const prevIsOpenRef = useRef(false);
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !prevIsOpenRef.current) {
       void refreshAll();
     }
+    prevIsOpenRef.current = isOpen;
   }, [isOpen, refreshAll]);
 
   useEffect(() => {

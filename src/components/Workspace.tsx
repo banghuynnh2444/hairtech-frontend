@@ -2798,7 +2798,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         const focusedTag = document.activeElement?.tagName || "";
         if (["TEXTAREA", "INPUT", "SELECT"].includes(focusedTag)) return;
         const k = e.key.toLowerCase();
-        if (k === "b" || e.key === "Escape") resetChainState();
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && k === "b") resetChainState();
+        if (e.key === "Escape") resetChainState();
         if ((e.ctrlKey || e.metaKey) && k === "s") {
           e.preventDefault();
           if (!activeProjectRef.current) {
@@ -2821,35 +2822,37 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
           redoHistory();
           return;
         }
-        if (k === "w") {
-          camera.position.set(0, 0.5, 4.3);
-          controls.target.set(0, 0.3, 0);
-          controls.update();
-          requestRender();
-        }
-        if (k === "a") {
-          camera.position.set(4.3, 0.5, 0);
-          controls.target.set(0, 0.3, 0);
-          controls.update();
-          requestRender();
-        }
-        if (k === "s") {
-          camera.position.set(0, 0.5, -4.3);
-          controls.target.set(0, 0.3, 0);
-          controls.update();
-          requestRender();
-        }
-        if (k === "d") {
-          camera.position.set(-4.3, 0.5, 0);
-          controls.target.set(0, 0.3, 0);
-          controls.update();
-          requestRender();
-        }
-        if (k === "t") {
-          camera.position.set(0, 4.3, 0.3);
-          controls.target.set(0, 0.3, 0);
-          controls.update();
-          requestRender();
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          if (k === "w") {
+            camera.position.set(0, 0.5, 4.3);
+            controls.target.set(0, 0.3, 0);
+            controls.update();
+            requestRender();
+          }
+          if (k === "a") {
+            camera.position.set(4.3, 0.5, 0);
+            controls.target.set(0, 0.3, 0);
+            controls.update();
+            requestRender();
+          }
+          if (k === "s") {
+            camera.position.set(0, 0.5, -4.3);
+            controls.target.set(0, 0.3, 0);
+            controls.update();
+            requestRender();
+          }
+          if (k === "d") {
+            camera.position.set(-4.3, 0.5, 0);
+            controls.target.set(0, 0.3, 0);
+            controls.update();
+            requestRender();
+          }
+          if (k === "t") {
+            camera.position.set(0, 4.3, 0.3);
+            controls.target.set(0, 0.3, 0);
+            controls.update();
+            requestRender();
+          }
         }
       },
       { signal: eventController.signal },
@@ -3097,11 +3100,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({ onLogout }) => {
         // Thêm ghi chú kỹ thuật nếu có
         const notes = notesArea.value.trim();
         if (notes) {
-          const notesY = flatImg && flatImg.src && flatImg.naturalWidth > 0 ? 720 : 430;
+          const hasFlat = Boolean(flatImg && flatImg.src && flatImg.naturalWidth > 0);
+          const notesY = hasFlat ? 720 : 430;
           pdf.setFontSize(10);
-          pdf.text("GHI CHU KY THUAT:", 30, notesY);
           const lines = pdf.splitTextToSize(notes, 535);
-          pdf.text(lines, 30, notesY + 14);
+          const requiredHeight = lines.length * 13;
+          if (hasFlat && notesY + 14 + requiredHeight > 815) {
+            // Nếu ghi chú dài bị tràn đáy trang A4 khi đã có ảnh 2D, tự động đưa sang trang 2
+            pdf.addPage();
+            pdf.setFontSize(14);
+            pdf.text("HAIRTECH 3D — GHI CHU KY THUAT", 30, 40);
+            pdf.setFontSize(10);
+            pdf.text(lines, 30, 65);
+          } else {
+            pdf.text("GHI CHU KY THUAT:", 30, notesY);
+            pdf.text(lines, 30, notesY + 14);
+          }
         }
         pdf.save("hairtech-so-do-3d.pdf");
       },
